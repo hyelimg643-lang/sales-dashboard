@@ -394,7 +394,7 @@ def agent_profile(data, agent_id: str, ym: str) -> dict:
         "total": len(mine),
         "retention": safe_rate((mine["status"] == "유지").sum(), len(mine)),
         "risk": None if row.empty else row.iloc[0],  # 해당 월 재직이 아니면 위험점수 대상이 아니다
-        "recent": mine.sort_values("contract_date", ascending=False).head(10),
+        "recent": mine.sort_values(["contract_date", "contract_id"], ascending=False).head(10),
     }
 
 

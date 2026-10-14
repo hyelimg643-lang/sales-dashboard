@@ -9,12 +9,15 @@ import sys
 from itertools import product
 from pathlib import Path
 
+import base64
+
 import markdown
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import metrics as m  # noqa: E402
+import export as ex  # noqa: E402
 import report as rp  # noqa: E402
 
 LOW_RATE = 90.0
@@ -87,6 +90,27 @@ def build():
     for aid in data["agents"]["agent_id"]:
         agent_mg[aid] = [[int(cnt.get((aid, ym, g), 0)) for g in m.PRODUCT_GROUPS] for ym in months]
 
+    # 설계사 조회: 월별 건수·보험료·유지 건수(누적 유지율 계산용), 위험 조건, 계약 목록
+    ag = data["agents"].sort_values("agent_id")
+    agents = [[r.agent_id, r.agent_name, r.branch_id, r.branch_name, r.status,
+               r.appoint_date.strftime("%Y-%m-%d"), r.db_source] for r in ag.itertuples()]
+    by = c.assign(kept=(c["status"] == "유지").astype(int)).groupby(["agent_id", "year_month"]).agg(
+        n=("contract_id", "size"), prem=("monthly_premium", "sum"), kept=("kept", "sum"))
+    agent_month = {aid: [[int(by.loc[(aid, ym)].n), int(by.loc[(aid, ym)].prem), int(by.loc[(aid, ym)].kept)]
+                         if (aid, ym) in by.index else [0, 0, 0] for ym in months] for aid in ag["agent_id"]}
+    risk_chk = {}
+    for ym in months:
+        r = m.risk_scores(data, ym)
+        risk_chk[ym] = {a["agent_id"]: [[x["해당"] == "해당", x["현재 값"]] for _, x in m.risk_checklist(a).iterrows()]
+                        for _, a in r.iterrows()}
+    names = data["products"].set_index("product_id")["product_name"]
+    agent_contracts = {aid: [] for aid in ag["agent_id"]}
+    for r in c.sort_values(["contract_date", "contract_id"], ascending=False).itertuples():
+        agent_contracts[r.agent_id].append([r.contract_date.strftime("%Y-%m-%d"), names[r.product_id], r.product_group,
+                                            int(r.monthly_premium), r.status, int(r.is_replacement)])
+    sample = m.risk_checklist(m.risk_scores(data, months[-1]).iloc[0])  # 조건 이름·기준·배점은 metrics.py에서 가져온다
+    chk_rule = [[x["조건"], x["기준"], int(x["점수"].split(" / ")[1])] for _, x in sample.iterrows()]
+
     # ③ 실적 예측
     forecast = {}
     for ym in months:
@@ -110,7 +134,9 @@ def build():
         md = rp.build_report(data, ym)
         # 굵은 소제목 바로 아래 목록도 목록으로 렌더링되도록 빈 줄을 넣는다 (미리보기용)
         md_view = re.sub(r"(\*\*[^\n]*\*\*)\n(- )", r"\1\n\n\2", md)
-        reports[ym] = {"md": md, "html": markdown.markdown(md_view, extensions=["tables"])}
+        reports[ym] = {"md": md, "html": markdown.markdown(md_view, extensions=["tables"]),
+                       "pdf": base64.b64encode(ex.report_pdf(md)).decode(),
+                       "docx": base64.b64encode(ex.report_docx(md)).decode()}
 
     payload = {
         "months": months,
@@ -118,6 +144,8 @@ def build():
         "groups": m.PRODUCT_GROUPS,
         "trend": trend, "perf": perf, "risk": risk, "agentMG": agent_mg,
         "forecast": forecast, "reports": reports,
+        "agents": agents, "agentMonth": agent_month, "riskChk": risk_chk, "chkRule": chk_rule,
+        "agentContracts": agent_contracts,
         "gapRate": m.FORECAST_GAP_RATE,
     }
     tpl = (ROOT / "web" / "template.html").read_text(encoding="utf-8")
