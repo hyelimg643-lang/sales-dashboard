@@ -2,12 +2,12 @@
 import io
 import re
 import zipfile
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import export as ex
 import metrics as m
 import report as rp
 
@@ -105,16 +105,22 @@ def card_head(title, hint=None):
 
 @st.cache_data
 def get_data(uploads=()):
-    """기본 data/ CSV에 올린 파일을 덮어써서 읽는다. (데이터, 오류 목록)을 돌려준다."""
+    """기본 data/ CSV에 올린 파일(CSV·엑셀)을 덮어써서 읽는다. (데이터, 오류, 바뀐 표)를 돌려준다."""
     raw = m.read_tables()
-    errors = []
-    for name, content in uploads:
+    errors, used = [], []
+    for filename, content in uploads:
         try:
-            raw[name] = m.read_csv(content)
+            tables = m.read_upload(filename, content)
         except Exception as e:  # 깨진 파일은 어떤 예외든 사용자 문구로 바꾼다
-            errors.append(f"{name}.csv: 파일을 읽을 수 없습니다 ({e})")
+            errors.append(f"{filename}: 파일을 읽을 수 없습니다 ({e})")
+            continue
+        if not tables:
+            names = ", ".join(m.TABLES)
+            errors.append(f"{filename}: 파일 이름(CSV·엑셀) 또는 시트 이름(엑셀)이 {names} 중 하나여야 합니다.")
+        raw.update(tables)
+        used += list(tables)
     errors = errors or m.validate_tables(raw)
-    return (None, errors) if errors else (m.prepare_data(raw), [])
+    return (None, errors, []) if errors else (m.prepare_data(raw), [], sorted(set(used)))
 
 
 @st.cache_data
@@ -128,26 +134,36 @@ def template_zip():
     return buf.getvalue()
 
 
+@st.cache_data
+def template_xlsx():
+    """현재 더미데이터를 시트 5개짜리 엑셀 한 파일로."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for name, df in m.read_tables().items():
+            df.to_excel(w, sheet_name=name, index=False)
+    return buf.getvalue()
+
+
+@st.cache_data
+def report_files(md):
+    return ex.report_pdf(md), ex.report_docx(md)
+
+
 # ---------------------------------------------------------------- 데이터 올리기
 with st.sidebar:
     with st.expander("데이터 올리기", icon=":material/upload_file:"):
-        files = st.file_uploader("CSV 파일 (여러 개 선택 가능)", type="csv", accept_multiple_files=True,
-                                 key="uploads")
-        st.caption("파일 이름: agents, branches, contracts, products, targets (.csv)  \n"
-                   "올리지 않은 파일은 기본 더미데이터를 씁니다. 올린 파일은 저장되지 않습니다.")
-        st.download_button("양식 내려받기 (CSV 5개)", template_zip(), "데이터양식.zip", "application/zip",
+        files = st.file_uploader("CSV·엑셀 파일 (여러 개 선택 가능)", type=["csv", "xlsx"],
+                                 accept_multiple_files=True, key="uploads")
+        st.caption("CSV: 파일 이름이 agents, branches, contracts, products, targets  \n"
+                   "엑셀: 위 이름의 파일, 또는 시트 이름이 위 이름인 통합 문서 한 개  \n"
+                   "올리지 않은 표는 기본 더미데이터를 씁니다. 올린 파일은 저장되지 않습니다.")
+        st.download_button("엑셀 양식 (시트 5개)", template_xlsx(), "데이터양식.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           icon=":material/download:", width="stretch")
+        st.download_button("CSV 양식 (5개 묶음)", template_zip(), "데이터양식.zip", "application/zip",
                            icon=":material/download:", width="stretch")
 
-uploads, name_errors = [], []
-for f in files or []:
-    name = Path(f.name).stem.lower()
-    if name in m.TABLES:
-        uploads.append((name, f.getvalue()))
-    else:
-        name_errors.append(f"{f.name}: 파일 이름은 {', '.join(n + '.csv' for n in m.TABLES)} 중 하나여야 합니다.")
-data, errors = get_data(tuple(sorted(uploads)))
-errors = name_errors + errors
-used = sorted({n for n, _ in uploads})
+data, errors, used = get_data(tuple(sorted((f.name, f.getvalue()) for f in files or [])))
 
 source = "더미데이터" if not used else "올린 데이터"
 st.markdown(f'<div class="page-title"><div class="t">영업 성과 분석 대시보드</div><div class="badge">PoC · {source}</div></div>',
@@ -157,7 +173,7 @@ if errors:
              + "\n".join(f"- {e}" for e in errors))
     st.stop()
 if used:
-    st.success(f"올린 파일로 계산했습니다: {', '.join(n + '.csv' for n in used)} (나머지는 기본 더미데이터)",
+    st.success(f"올린 파일로 계산했습니다: {', '.join(used)}" + ("" if len(used) == len(m.TABLES) else " (나머지는 기본 더미데이터)"),
                icon=":material/check_circle:")
 months = m.month_list(data["contracts"])
 
@@ -177,8 +193,9 @@ if branch_name != "전체":
     branch_ids = data["branches"].loc[data["branches"]["branch_name"] == branch_name, "branch_id"].tolist()
 group_filter = None if len(groups) == len(m.PRODUCT_GROUPS) else groups
 
-tab1, tab2, tab3, tab4 = st.tabs([":material/monitoring: 성과 대시보드", ":material/warning: 위험 설계사",
-                                  ":material/history: 실적 예측", ":material/description: 월간 보고서"])
+tab1, tab2, tab5, tab3, tab4 = st.tabs([":material/monitoring: 성과 대시보드", ":material/warning: 위험 설계사",
+                                        ":material/person_search: 설계사 조회", ":material/history: 실적 예측",
+                                        ":material/description: 월간 보고서"])
 
 # ---------------------------------------------------------------- ① 성과 대시보드
 with tab1:
@@ -360,6 +377,91 @@ with tab2:
     else:
         st.caption("표에서 설계사를 선택하면 월별 판매 건수와 상품군 구성이 표시됩니다.")
 
+# ---------------------------------------------------------------- 설계사 조회
+with tab5:
+    pool = data["agents"]
+    if branch_ids:
+        pool = pool[pool["branch_id"].isin(branch_ids)]
+    pool = pool.sort_values("agent_id")
+    labels = {r.agent_id: f"{r.agent_name} · {r.branch_name}" + ("" if r.status == "재직" else f" ({r.status})")
+              for r in pool.itertuples()}
+    top = m.risk_scores(data, ym, branch_ids)["agent_id"]  # 처음에는 위험점수가 가장 높은 설계사
+    ids = list(labels)
+    agent_id = st.selectbox("설계사", ids, index=ids.index(top.iloc[0]) if len(top) else 0,
+                            format_func=labels.get, key="agent_pick",
+                            help="사이드바의 지점 필터를 따릅니다. 처음에는 위험점수가 가장 높은 설계사가 선택됩니다.")
+    p = m.agent_profile(data, agent_id, ym)
+    r = p["risk"]
+    st.caption(f"{p['branch']} · 위촉 {p['appoint_date']} · {p['status']} · DB 유입 {p['db_source']} · "
+               f"기준 월까지 누적 {p['total']:,}건")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi_card("doc", f"신계약 건수 ({ym})", f"{p['count']:,}건", change_html(p["count_change"]))
+    with c2:
+        kpi_card("coin", f"신계약 보험료 ({ym})", fmt_won(p["premium"]), change_html(p["premium_change"]))
+    with c3:
+        kpi_card("pct", "유지율 (누적)", fmt_pct(p["retention"]), "80% 미만이면 위험 조건")
+    with c4:
+        if r is None:
+            kpi_card("user", "위험점수", "-", f"{ym} 재직 설계사가 아니라 대상 아님")
+        else:
+            color = {"고위험": CRITICAL, "관찰": WARNING}.get(r["등급"])
+            kpi_card("user", "위험점수", f"{r['점수']}점 · {r['등급']}", r["해당 사유"] or "해당 사유 없음", color)
+
+    left, right = st.columns(2)
+    with left, card():
+        card_head("월별 판매 건수 (12개월)", "막대 그래프")
+        mc = m.agent_monthly_counts(data, agent_id, ym)
+        fig = go.Figure(go.Bar(x=mc["연월"], y=mc["건수"], marker=dict(color=SERIES, cornerradius=4),
+                               hovertemplate="%{x}<br>%{y}건<extra></extra>"))
+        fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), bargap=0.35,
+                          xaxis=dict(type="category", title=None), yaxis=dict(title=None, dtick=1))
+        show(fig)
+    with right, card():
+        card_head("상품군 구성 vs 전사 평균", "비교 막대")
+        mix = m.agent_group_mix(data, agent_id, ym)
+        fig = go.Figure()
+        for name, color in [("본인", SERIES), ("전사 평균", COMPARE)]:
+            fig.add_bar(x=mix["상품군"], y=mix[name], name=name, marker=dict(color=color, cornerradius=4),
+                        text=[f"{v:.1f}%" for v in mix[name]], textposition="outside",
+                        hovertemplate=f"%{{x}}<br>{name} %{{y:.1f}}%<extra></extra>")
+        fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), barmode="group", bargap=0.35,
+                          bargroupgap=0.1, xaxis=dict(title=None),
+                          yaxis=dict(title=None, ticksuffix="%", range=[0, max(mix[["본인", "전사 평균"]].max()) * 1.2]),
+                          legend=dict(orientation="h", y=1.12, x=1, xanchor="right"))
+        show(fig)
+
+    left, right = st.columns(2)
+    with left, card():
+        card_head("위험 신호 점검 (docs/rules.md 기준)", "해당 조건만 점수")
+        if r is None:
+            st.info(f"{ym} 기준 재직 설계사가 아니어서 위험점수를 계산하지 않습니다.")
+        else:
+            chk = m.risk_checklist(r)
+            st.dataframe(chk.style.map(lambda v: f"color: {CRITICAL}; font-weight: 600" if v == "해당" else "",
+                                       subset=["해당"]),
+                         hide_index=True, width="stretch",
+                         column_config={"조건": st.column_config.TextColumn(width=95),
+                                        "해당": st.column_config.TextColumn(width=50),
+                                        "점수": st.column_config.TextColumn(width=60)})
+    with right, card():
+        card_head("최근 계약 10건", f"{ym}까지")
+        rc = p["recent"]
+        names = data["products"].set_index("product_id")["product_name"]
+        table = pd.DataFrame({
+            "계약일": rc["contract_date"].dt.strftime("%Y-%m-%d"),
+            "상품": rc["product_id"].map(names),
+            "상품군": rc["product_group"],
+            "월납보험료": rc["monthly_premium"].map(lambda v: f"{int(v):,}원"),
+            "상태": rc["status"],
+            "승환": rc["is_replacement"].map({1: "예", 0: "-"}),
+        })
+        if table.empty:
+            st.info("기준 월까지 계약이 없습니다.")
+        else:
+            st.dataframe(table, hide_index=True, width="stretch")
+
 # ---------------------------------------------------------------- ③ 실적 예측
 with tab3:
     fc, seasonal = m.next_quarter_forecast(data, ym, branch_ids)
@@ -439,13 +541,19 @@ with tab4:
 
     saved = st.session_state.get("report")
     if saved and saved[0] == report_ym:
+        d1, d2, d3, _ = st.columns([1, 1, 1, 2])
+        fname = f"영업성과보고서_{report_ym}"
+        pdf, docx = report_files(saved[1])
+        d1.download_button("PDF", pdf, f"{fname}.pdf", "application/pdf",
+                           icon=":material/picture_as_pdf:", type="primary", width="stretch")
+        d2.download_button("워드 (.docx)", docx, f"{fname}.docx",
+                           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           icon=":material/description:", width="stretch")
+        d3.download_button("마크다운 (.md)", saved[1].encode("utf-8"), f"{fname}.md", "text/markdown",
+                           icon=":material/download:", width="stretch")
         with card():
             card_head("미리보기 (docs/report_template.md 구성)", "마크다운 렌더링")
             # 미리보기에서는 제목 크기만 두 단계 줄인다 (다운로드 파일은 양식 그대로)
             st.markdown(re.sub(r"^(#+) ", r"\1## ", saved[1], flags=re.M))
-        st.download_button(
-            "⬇ 보고서 다운로드 (.md)", saved[1].encode("utf-8"),
-            file_name=f"영업성과보고서_{report_ym}.md", mime="text/markdown",
-        )
     else:
         st.info("보고 월을 고르고 \"보고서 생성\"을 누르세요.")

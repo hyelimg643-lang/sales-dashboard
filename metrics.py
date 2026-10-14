@@ -38,6 +38,28 @@ def read_csv(source) -> pd.DataFrame:
     raise ValueError("파일 인코딩을 읽을 수 없습니다 (UTF-8 또는 CP949로 저장해 주세요).")
 
 
+def read_upload(filename: str, content: bytes) -> dict:
+    """올린 파일 하나를 {표 이름: DataFrame}으로 읽는다.
+
+    CSV는 파일 이름으로, 엑셀은 파일 이름(첫 시트) 또는 시트 이름으로 표를 정한다.
+    """
+    name = Path(filename).stem.lower()
+    if Path(filename).suffix.lower() == ".csv":
+        return {name: read_csv(content)} if name in TABLES else {}
+    sheets = pd.read_excel(io.BytesIO(content), sheet_name=None, dtype={"year_month": str})
+    if name in TABLES:
+        return {name: _clean_excel(next(iter(sheets.values())))}
+    return {s.strip().lower(): _clean_excel(df) for s, df in sheets.items() if s.strip().lower() in TABLES}
+
+
+def _clean_excel(df: pd.DataFrame) -> pd.DataFrame:
+    """엑셀이 날짜로 바꿔 둔 연월(2026-09-01 00:00:00)을 2026-09로 되돌린다."""
+    df = df.copy()
+    if "year_month" in df.columns:
+        df["year_month"] = df["year_month"].astype(str).str.replace(r"^(\d{4}-\d{2})-\d{2}.*$", r"\1", regex=True)
+    return df
+
+
 def read_tables(data_dir: Path = DATA_DIR) -> dict:
     return {name: read_csv(data_dir / f"{name}.csv") for name in TABLES}
 
@@ -352,6 +374,42 @@ def agent_group_mix(data, agent_id: str, ym: str) -> pd.DataFrame:
         "본인": share(c[c["agent_id"] == agent_id]).values,
         "전사 평균": share(c).values,
     })
+
+
+def agent_profile(data, agent_id: str, ym: str) -> dict:
+    """설계사 한 명의 기본 정보, 당월·전월 실적, 위험 조건 (④ 설계사 조회 화면용)."""
+    a = data["agents"].set_index("agent_id").loc[agent_id]
+    c = data["contracts"]
+    mine = c[(c["agent_id"] == agent_id) & (c["contract_date"] <= pd.Period(ym, "M").end_time)]
+    now, prev = mine[mine["year_month"] == ym], mine[mine["year_month"] == prev_month(ym)]
+    risk = risk_scores(data, ym)
+    row = risk[risk["agent_id"] == agent_id]
+    return {
+        "name": a["agent_name"], "branch": a["branch_name"], "status": a["status"],
+        "appoint_date": a["appoint_date"].strftime("%Y-%m-%d"), "db_source": a["db_source"],
+        "count": len(now), "count_change": safe_rate(len(now) - len(prev), len(prev)),
+        "premium": int(now["monthly_premium"].sum()),
+        "premium_change": safe_rate(now["monthly_premium"].sum() - prev["monthly_premium"].sum(),
+                                    prev["monthly_premium"].sum()),
+        "total": len(mine),
+        "retention": safe_rate((mine["status"] == "유지").sum(), len(mine)),
+        "risk": None if row.empty else row.iloc[0],  # 해당 월 재직이 아니면 위험점수 대상이 아니다
+        "recent": mine.sort_values("contract_date", ascending=False).head(10),
+    }
+
+
+def risk_checklist(r) -> pd.DataFrame:
+    """위험점수 조건별 해당 여부와 근거 값 (rules.md 2장)."""
+    f = lambda v: "-" if pd.isna(v) else f"{v:.1f}%"
+    rows = [
+        ("판매 급감", 30, r["cond_drop"], f"직전 3개월 {r['prev3']}건 → 최근 3개월 {r['recent3']}건", "직전 대비 70% 이하"),
+        ("유지율 저하", 25, r["cond_retention"], f"유지율 {f(r['유지율'])}", "80% 미만"),
+        ("연속 무실적", 25, r["cond_no_sales"], f"최근 2개월 {r['recent2']}건", "0건"),
+        ("상품 편중", 10, r["cond_concentration"], f"편중도 {f(r['편중도'])}", "70% 이상"),
+        ("조기해지 다발", 10, r["cond_early_cancel"], f"조기해지율 {f(r['조기해지율'])}", "10% 이상"),
+    ]
+    return pd.DataFrame([{"조건": n, "해당": "해당" if hit else "-", "현재 값": v, "기준": b,
+                          "점수": f"{p if hit else 0} / {p}"} for n, p, hit, v, b in rows])
 
 
 # ---------------------------------------------------------------- 예측 (rules.md 5장)
