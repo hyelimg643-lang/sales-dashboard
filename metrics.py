@@ -1,4 +1,5 @@
 """지표 계산 로직 (docs/rules.md 기준). 화면 코드(app.py)와 분리한다."""
+import io
 from pathlib import Path
 
 import pandas as pd
@@ -9,14 +10,86 @@ PRODUCT_GROUPS = ["종신", "건강", "연금", "저축"]
 
 
 # ---------------------------------------------------------------- 데이터 로드
-def load_data(data_dir: Path = DATA_DIR) -> dict:
-    """CSV 5개를 읽고 계약에 지점·상품군·연월을 붙여 돌려준다."""
-    read = lambda name: pd.read_csv(data_dir / f"{name}.csv", encoding="utf-8-sig")
-    branches = read("branches")
-    agents = read("agents")
-    products = read("products")
-    targets = read("targets")
-    contracts = read("contracts")
+TABLES = {  # 파일 이름: (표시명, 필수 열)
+    "branches": ("지점", ["branch_id", "branch_name", "region"]),
+    "agents": ("설계사", ["agent_id", "agent_name", "branch_id", "appoint_date", "status", "db_source"]),
+    "products": ("상품", ["product_id", "product_name", "product_group"]),
+    "contracts": ("신계약", ["contract_id", "contract_date", "agent_id", "product_id", "monthly_premium",
+                             "status", "cancel_date", "is_replacement"]),
+    "targets": ("목표", ["year_month", "branch_id", "target_count", "target_premium"]),
+}
+ALLOWED = {  # (파일, 열): 허용 값
+    ("agents", "status"): ["재직", "해촉"],
+    ("contracts", "status"): ["유지", "해지", "실효"],
+    ("products", "product_group"): PRODUCT_GROUPS,
+}
+DATES = {"agents": ["appoint_date"], "contracts": ["contract_date", "cancel_date"]}
+NUMBERS = {"contracts": ["monthly_premium", "is_replacement"], "targets": ["target_count", "target_premium"]}
+
+
+def read_csv(source) -> pd.DataFrame:
+    """CSV 읽기. 엑셀에서 저장한 CP949 파일도 받는다."""
+    raw = source.read_bytes() if isinstance(source, Path) else source
+    for enc in ("utf-8-sig", "cp949"):
+        try:
+            return pd.read_csv(io.BytesIO(raw), encoding=enc, dtype={"year_month": str})
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("파일 인코딩을 읽을 수 없습니다 (UTF-8 또는 CP949로 저장해 주세요).")
+
+
+def read_tables(data_dir: Path = DATA_DIR) -> dict:
+    return {name: read_csv(data_dir / f"{name}.csv") for name in TABLES}
+
+
+def validate_tables(raw: dict) -> list:
+    """필수 열, 날짜·숫자 형식, 허용 값, ID 연결을 검사해 오류 문구 목록을 돌려준다."""
+    errors = []
+    for name, (label, cols) in TABLES.items():
+        df = raw[name]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            errors.append(f"{name}.csv({label}): 필수 열이 없습니다: {', '.join(missing)}")
+        elif df.empty:
+            errors.append(f"{name}.csv({label}): 데이터 행이 없습니다.")
+    if errors:
+        return errors  # 열이 맞아야 아래 검사가 의미 있다
+
+    for name, cols in DATES.items():
+        for c in cols:
+            bad = pd.to_datetime(raw[name][c], errors="coerce").isna() & raw[name][c].notna()
+            if bad.any():
+                errors.append(f"{name}.csv: {c} 열에 날짜가 아닌 값이 {bad.sum()}개 있습니다 (예: {raw[name].loc[bad, c].iloc[0]}).")
+    for name, cols in NUMBERS.items():
+        for c in cols:
+            bad = pd.to_numeric(raw[name][c], errors="coerce").isna()
+            if bad.any():
+                errors.append(f"{name}.csv: {c} 열에 숫자가 아닌 값이나 빈 칸이 {bad.sum()}개 있습니다.")
+    bad_ym = ~raw["targets"]["year_month"].astype(str).str.fullmatch(r"\d{4}-\d{2}")
+    if bad_ym.any():
+        errors.append(f"targets.csv: year_month는 2026-09 형식이어야 합니다 (예: {raw['targets'].loc[bad_ym, 'year_month'].iloc[0]}).")
+    for (name, c), allowed in ALLOWED.items():
+        bad = sorted(set(raw[name][c].dropna().astype(str)) - set(allowed))
+        if bad:
+            errors.append(f"{name}.csv: {c} 열에 허용되지 않은 값이 있습니다: {', '.join(bad[:5])} (허용: {', '.join(allowed)})")
+
+    links = [("agents", "branch_id", "branches"), ("targets", "branch_id", "branches"),
+             ("contracts", "agent_id", "agents"), ("contracts", "product_id", "products")]
+    for name, c, ref in links:
+        unknown = sorted(set(raw[name][c].dropna()) - set(raw[ref][c]))
+        if unknown:
+            errors.append(f"{name}.csv: {ref}.csv에 없는 {c}가 있습니다: {', '.join(map(str, unknown[:5]))}")
+    return errors
+
+
+def prepare_data(raw: dict) -> dict:
+    """원본 표 5개에 지점·상품군·연월을 붙여 계산용 데이터로 만든다."""
+    branches = raw["branches"].copy()
+    agents = raw["agents"].copy()
+    products = raw["products"].copy()
+    targets = raw["targets"].copy()
+    contracts = raw["contracts"].copy()
+    targets["year_month"] = targets["year_month"].astype(str)
 
     agents["appoint_date"] = pd.to_datetime(agents["appoint_date"])
     contracts["contract_date"] = pd.to_datetime(contracts["contract_date"])
@@ -37,6 +110,11 @@ def load_data(data_dir: Path = DATA_DIR) -> dict:
         "targets": targets,
         "contracts": contracts,
     }
+
+
+def load_data(data_dir: Path = DATA_DIR) -> dict:
+    """data/ 폴더의 CSV 5개를 읽어 계산용 데이터로 만든다."""
+    return prepare_data(read_tables(data_dir))
 
 
 def month_list(contracts: pd.DataFrame) -> list:

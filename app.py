@@ -1,5 +1,8 @@
 """영업 성과 분석 대시보드 (PoC · 더미데이터). 실행: streamlit run app.py"""
+import io
 import re
+import zipfile
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -101,19 +104,66 @@ def card_head(title, hint=None):
 
 
 @st.cache_data
-def get_data():
-    return m.load_data()
+def get_data(uploads=()):
+    """기본 data/ CSV에 올린 파일을 덮어써서 읽는다. (데이터, 오류 목록)을 돌려준다."""
+    raw = m.read_tables()
+    errors = []
+    for name, content in uploads:
+        try:
+            raw[name] = m.read_csv(content)
+        except Exception as e:  # 깨진 파일은 어떤 예외든 사용자 문구로 바꾼다
+            errors.append(f"{name}.csv: 파일을 읽을 수 없습니다 ({e})")
+    errors = errors or m.validate_tables(raw)
+    return (None, errors) if errors else (m.prepare_data(raw), [])
 
 
-data = get_data()
+@st.cache_data
+def template_zip():
+    """현재 더미데이터 CSV 5개를 양식으로 묶는다."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in m.TABLES:
+            z.write(m.DATA_DIR / f"{name}.csv", f"{name}.csv")
+        z.write(m.DATA_DIR / "README_더미데이터.md", "README_더미데이터.md")
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------- 데이터 올리기
+with st.sidebar:
+    with st.expander("데이터 올리기", icon=":material/upload_file:"):
+        files = st.file_uploader("CSV 파일 (여러 개 선택 가능)", type="csv", accept_multiple_files=True,
+                                 key="uploads")
+        st.caption("파일 이름: agents, branches, contracts, products, targets (.csv)  \n"
+                   "올리지 않은 파일은 기본 더미데이터를 씁니다. 올린 파일은 저장되지 않습니다.")
+        st.download_button("양식 내려받기 (CSV 5개)", template_zip(), "데이터양식.zip", "application/zip",
+                           icon=":material/download:", width="stretch")
+
+uploads, name_errors = [], []
+for f in files or []:
+    name = Path(f.name).stem.lower()
+    if name in m.TABLES:
+        uploads.append((name, f.getvalue()))
+    else:
+        name_errors.append(f"{f.name}: 파일 이름은 {', '.join(n + '.csv' for n in m.TABLES)} 중 하나여야 합니다.")
+data, errors = get_data(tuple(sorted(uploads)))
+errors = name_errors + errors
+used = sorted({n for n, _ in uploads})
+
+source = "더미데이터" if not used else "올린 데이터"
+st.markdown(f'<div class="page-title"><div class="t">영업 성과 분석 대시보드</div><div class="badge">PoC · {source}</div></div>',
+            unsafe_allow_html=True)
+if errors:
+    st.error("올린 파일에 문제가 있어 화면을 표시할 수 없습니다. 고친 뒤 다시 올려 주세요.\n\n"
+             + "\n".join(f"- {e}" for e in errors))
+    st.stop()
+if used:
+    st.success(f"올린 파일로 계산했습니다: {', '.join(n + '.csv' for n in used)} (나머지는 기본 더미데이터)",
+               icon=":material/check_circle:")
 months = m.month_list(data["contracts"])
 
 # ---------------------------------------------------------------- 사이드바 (모든 탭 공통)
-st.markdown('<div class="page-title"><div class="t">영업 성과 분석 대시보드</div><div class="badge">PoC · 더미데이터</div></div>',
-            unsafe_allow_html=True)
-
 with st.sidebar:
-    ym = st.selectbox("기준 월", months, index=months.index("2026-09"))
+    ym = st.selectbox("기준 월", months, index=months.index("2026-09") if "2026-09" in months else len(months) - 1)
     branch_names = ["전체"] + data["branches"]["branch_name"].tolist()
     branch_name = st.selectbox("지점", branch_names, index=0)
     st.markdown("상품군")
