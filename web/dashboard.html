@@ -2,44 +2,53 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap">
 <style>
 /* Layout: 좌측 필터 레일 + 우측 탭 작업 영역, 폰에서는 필터가 위로 접힌다 */
 :root {
-  --bg: #f6f7f9;
+  --bg: #f2f5f7;
   --surface: #ffffff;
-  --line: #dfe3ea;
-  --line-soft: #eceff4;
-  --ink: #141a24;
-  --ink-2: #4c5565;
-  --ink-3: #7b8494;
-  --accent: #2a78d6;
-  --accent-soft: #e5effb;
-  --compare: #eb6834;
-  --critical: #c93636;
+  --rail: #f7f9fa;
+  --line: #e0e6eb;
+  --line-soft: #edf1f4;
+  --ink: #15232d;
+  --ink-2: #4a5a67;
+  --ink-3: #7d8b97;
+  --accent: #157f8d;
+  --accent-soft: #e1f1f3;
+  --accent-ink: #0f6370;
+  --bar: #8d9aaa;
+  --low: #ee8a86;
+  --compare: #a9b4c0;
+  --critical: #d03a3a;
   --critical-soft: #fbe9e9;
-  --warning: #a86d00;
-  --warning-soft: #fdf3dc;
-  --good: #16803c;
-  --target: #8a8f99;
-  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
-  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --warning: #d9822b;
+  --warning-soft: #fdf0e1;
+  --good: #1e9a5a;
+  --target: #8a939d;
+  --teal-1: #157f8d; --teal-2: #4ea7b3; --teal-3: #85c3cc; --teal-4: #b6dce1;
+  --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-num: var(--font-body);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #11151b; --surface: #181d25; --line: #2a313c; --line-soft: #222832;
-    --ink: #eef1f5; --ink-2: #b4bccb; --ink-3: #848d9c;
-    --accent: #4b93ea; --accent-soft: #1b2b42; --compare: #e5733f;
-    --critical: #ef6b6b; --critical-soft: #3a1f22; --warning: #e0a63a; --warning-soft: #3a2f17;
-    --good: #4cc27a; --target: #9aa1ad; color-scheme: dark;
+    --bg: #0f1518; --surface: #172025; --rail: #141c20; --line: #29353c; --line-soft: #202a30;
+    --ink: #ebf1f3; --ink-2: #b3c0c7; --ink-3: #85939b;
+    --accent: #3eb2c0; --accent-soft: #163339; --accent-ink: #7fd3dd;
+    --bar: #6f7d8b; --low: #e57d79; --compare: #5b6773;
+    --critical: #f07070; --critical-soft: #3a1f22; --warning: #eba04f; --warning-soft: #3a2a17;
+    --good: #4cc27a; --target: #9aa3ab;
+    --teal-1: #3eb2c0; --teal-2: #2f909c; --teal-3: #27717b; --teal-4: #22575f; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #11151b; --surface: #181d25; --line: #2a313c; --line-soft: #222832;
-  --ink: #eef1f5; --ink-2: #b4bccb; --ink-3: #848d9c;
-  --accent: #4b93ea; --accent-soft: #1b2b42; --compare: #e5733f;
-  --critical: #ef6b6b; --critical-soft: #3a1f22; --warning: #e0a63a; --warning-soft: #3a2f17;
-  --good: #4cc27a; --target: #9aa1ad; color-scheme: dark;
+  --bg: #0f1518; --surface: #172025; --rail: #141c20; --line: #29353c; --line-soft: #202a30;
+  --ink: #ebf1f3; --ink-2: #b3c0c7; --ink-3: #85939b;
+  --accent: #3eb2c0; --accent-soft: #163339; --accent-ink: #7fd3dd;
+  --bar: #6f7d8b; --low: #e57d79; --compare: #5b6773;
+  --critical: #f07070; --critical-soft: #3a1f22; --warning: #eba04f; --warning-soft: #3a2a17;
+  --good: #4cc27a; --target: #9aa3ab;
+  --teal-1: #3eb2c0; --teal-2: #2f909c; --teal-3: #27717b; --teal-4: #22575f; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -52,12 +61,14 @@ body {
 header.top { max-width: 1320px; margin: 0 auto 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
 header.top h1 { font-size: 22px; font-weight: 700; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
 .badge { font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--surface); }
-.shell { max-width: 1320px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+.shell { max-width: 1320px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: stretch; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 1px 2px rgb(20 40 60 / 0.04), 0 8px 24px rgb(20 40 60 / 0.05); overflow: hidden; }
+main { padding: 18px 20px 22px; min-width: 0; }
+@media (max-width: 600px) { main { padding: 14px 12px 18px; } }
 @media (max-width: 860px) { .shell { grid-template-columns: minmax(0, 1fr); } }
 
 /* 필터 레일 */
-aside.filters { display: flex; flex-direction: column; gap: 16px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
-@media (max-width: 860px) { aside.filters { position: static; flex-direction: row; flex-wrap: wrap; } aside.filters > * { flex: 1 1 160px; } }
+aside.filters { display: flex; flex-direction: column; gap: 16px; padding: 20px 16px; background: var(--rail); border-right: 1px solid var(--line); }
+@media (max-width: 860px) { aside.filters { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); } aside.filters > * { flex: 1 1 160px; } }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > label, .field > .lbl { font-size: 12px; color: var(--ink-2); font-weight: 500; letter-spacing: 0.02em; }
 select, button { font: inherit; color: var(--ink); }
@@ -70,14 +81,15 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 탭 */
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
-.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; cursor: pointer; color: var(--ink-2); white-space: nowrap; font-weight: 500; }
-.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; cursor: pointer; color: var(--ink-2); white-space: nowrap; font-weight: 500; font-size: 13px; }
+.tabs button svg { width: 15px; height: 15px; flex: none; }
+.tabs button:hover { border-color: var(--accent); color: var(--accent-ink); }
+.tabs button[aria-selected="true"] { color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 600; }
 /* 좁은 화면에서도 탭 4개가 모두 보이도록 2x2로 배치 */
 @media (max-width: 640px) {
   .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; border-bottom: 0; overflow: visible; }
-  .tabs button { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 9px 8px; }
-  .tabs button[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .tabs button { padding: 9px 8px; }
 }
 .panel { display: flex; flex-direction: column; gap: 16px; }
 
@@ -85,15 +97,19 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .kpis.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 720px) { .kpis, .kpis.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 480px) { .kpi { padding: 12px; } .kpi .v { font-size: 18px; } }
-.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; }
-.kpi .k { font-size: 12px; color: var(--ink-2); }
-.kpi .v { font-family: var(--font-num); font-size: 26px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.25; overflow-wrap: break-word; word-break: keep-all; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.kpi .k { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.kpi .ic { width: 26px; height: 26px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
+.kpi .ic svg { width: 15px; height: 15px; }
+.up { color: var(--good); font-weight: 600; } .down { color: var(--critical); font-weight: 600; }
+.kpi .v { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; overflow-wrap: break-word; word-break: keep-all; }
+@media (max-width: 480px) { .kpi { padding: 12px; } .kpi .v { font-size: 19px; } .kpi .k { font-size: 12px; } }
 .kpi .s { font-size: 12px; color: var(--ink-3); }
-.kpi.crit { border-top: 3px solid var(--critical); } .kpi.crit .v { color: var(--critical); }
-.kpi.warn { border-top: 3px solid var(--warning); } .kpi.warn .v { color: var(--warning); }
+.kpi.crit .v { color: var(--critical); }
+.kpi.warn .v { color: var(--warning); }
 
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 12px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 12px; min-width: 0; }
+.hint { font-size: 11.5px; color: var(--accent-ink); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
 .card h2 { font-size: 15px; font-weight: 600; margin: 0; }
 .card .head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .card .cap { font-size: 12px; color: var(--ink-3); margin: 2px 0 8px; }
@@ -117,7 +133,8 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 .hbar { display: grid; grid-template-columns: 40px minmax(0, 1fr) 56px; align-items: center; gap: 8px; font-size: 13px; }
 .hbar .track { height: 22px; background: var(--line-soft); border-radius: 4px; overflow: hidden; }
 .hbar .fill { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
-.hbar .val { font-family: var(--font-num); font-size: 12px; color: var(--ink-2); text-align: right; }
+.hbar .track { background: transparent; }
+.hbar .val { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--ink-2); text-align: right; }
 #tip { position: fixed; pointer-events: none; z-index: 10; background: var(--ink); color: var(--bg); font-size: 12px; padding: 6px 9px; border-radius: 6px; white-space: nowrap; }
 
 /* 표 */
@@ -125,7 +142,7 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; white-space: nowrap; }
 th { font-weight: 500; color: var(--ink-2); background: var(--bg); font-size: 12px; }
-td.n, th.n { text-align: right; font-family: var(--font-num); font-size: 12.5px; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; }
 td.wrap { white-space: normal; min-width: 220px; }
 tbody tr:last-child td { border-bottom: 0; }
 tr.pick { cursor: pointer; }
@@ -189,10 +206,10 @@ footer.foot { max-width: 1320px; margin: 24px auto 0; font-size: 12px; color: va
 
   <main>
     <nav class="tabs" role="tablist">
-      <button role="tab" id="t-perf" data-tab="perf">① 성과 대시보드</button>
-      <button role="tab" id="t-risk" data-tab="risk">② 위험 설계사</button>
-      <button role="tab" id="t-fc" data-tab="fc">③ 실적 예측</button>
-      <button role="tab" id="t-report" data-tab="report">④ 월간 보고서</button>
+      <button role="tab" id="t-perf" data-tab="perf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>성과 대시보드</button>
+      <button role="tab" id="t-risk" data-tab="risk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>위험 설계사</button>
+      <button role="tab" id="t-fc" data-tab="fc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>실적 예측</button>
+      <button role="tab" id="t-report" data-tab="report"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>월간 보고서</button>
     </nav>
 
     <section class="panel" id="p-perf" role="tabpanel"></section>
@@ -275,6 +292,10 @@ function lineChart(el, labels, values, unit) {
   labels.forEach((l, i) => {
     if ((labels.length - 1 - i) % step === 0) s += `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${l}</text>`;
   });
+  // 최고점 표시 (12·1월이면 성수기로 표기)
+  const peak = values.indexOf(Math.max(...values)), pm = +labels[peak].slice(5);
+  const peakTxt = pm === 12 || pm === 1 ? "12~1월 성수기" : `최고 ${labels[peak]}`;
+  s += `<text x="${x(peak)}" y="${y(values[peak]) - 10}" text-anchor="middle" style="fill:${css("--ink-2")}">${peakTxt}</text>`;
   const last = values.length - 1;
   s += `<circle cx="${x(last)}" cy="${y(values[last])}" r="4.5" fill="${acc}" stroke="${css("--surface")}" stroke-width="2"/>`;
   const bw = (W - pad.l - pad.r) / Math.max(labels.length - 1, 1);
@@ -299,7 +320,7 @@ function barTarget(el, items, fmtV) {
   const y = v => H - pad.b - (H - pad.t - pad.b) * v / max;
   let s = yGrid(W, H, pad, max);
   items.forEach((d, i) => {
-    const cx = pad.l + slot * (i + 0.5), col = d.low ? css("--critical") : css("--accent");
+    const cx = pad.l + slot * (i + 0.5), col = d.low ? css("--low") : css("--bar");
     const h = y(0) - y(d.value), r = Math.min(4, h);
     s += `<path d="M${cx - bw / 2},${y(0)} V${y(d.value) + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${y(0)} Z" fill="${col}" data-tip="${esc(d.tip)}"/>`;
     if (d.target != null) s += `<line x1="${cx - slot * 0.4}" x2="${cx + slot * 0.4}" y1="${y(d.target)}" y2="${y(d.target)}" stroke="${css("--target")}" stroke-width="2" stroke-dasharray="6 4"/>`;
@@ -318,7 +339,7 @@ function simpleBars(el, labels, values) {
   let s = yGrid(W, H, pad, max);
   labels.forEach((l, i) => {
     const cx = pad.l + slot * (i + 0.5), h = y(0) - y(values[i]), r = Math.min(3, h);
-    if (values[i] > 0) s += `<path d="M${cx - bw / 2},${y(0)} V${y(values[i]) + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${y(0)} Z" fill="${css("--accent")}" data-tip="${l}<br>${values[i]}건"/>`;
+    if (values[i] > 0) s += `<path d="M${cx - bw / 2},${y(0)} V${y(values[i]) + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${y(0)} Z" fill="${css("--bar")}" data-tip="${l}<br>${values[i]}건"/>`;
     else s += `<rect x="${cx - bw / 2}" y="${pad.t}" width="${bw}" height="${H - pad.t - pad.b}" fill="transparent" data-tip="${l}<br>0건"/>`;
     if (i % (W < 420 ? 3 : 2) === (labels.length - 1) % (W < 420 ? 3 : 2)) s += `<text x="${cx}" y="${H - 8}" text-anchor="middle">${l.slice(2)}</text>`;
   });
@@ -352,18 +373,35 @@ function groupedBars(el, cats, a, b) {
 }
 
 /* ---------- ① 성과 대시보드 ---------- */
+const ICON = {
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/></svg>',
+  coin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>',
+  pct: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M19 5 5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
+};
+/* "전월 대비 +21.4%" → 부호에 따라 색과 화살표 */
+function change(txt) {
+  const m = txt.match(/^(.*?)([+-]\d[\d.,]*%)$/);
+  if (!m) return esc(txt);
+  const up = m[2].startsWith("+");
+  return `${esc(m[1])}<span class="${up ? "up" : "down"}">${m[2]} ${up ? "▲" : "▼"}</span>`;
+}
+/* 비중이 큰 상품군일수록 진한 청록 */
+const shadeRank = (rows, r) => 1 + [...rows].sort((a, b) => b[1] - a[1]).indexOf(r);
+const kpiCard = (icon, label, v, sub) =>
+  `<div class="kpi"><span class="k"><span class="ic">${ICON[icon]}</span>${label}</span><span class="v">${v}</span><span class="s">${sub}</span></div>`;
 function renderPerf() {
   const p = $("#p-perf");
   if (!S.groups.size) { p.innerHTML = `<div class="warnbox">상품군을 하나 이상 선택하세요.</div>`; return; }
   const key = `${S.ym}|${S.branch}|${mask()}`, d = D.perf[key];
   const k = d.kpi, partial = S.groups.size < 4;
-  const lowRow = d.branch.find(r => r[4]);
+  const maxShare = Math.max(...d.share.map(r => r[1]), 0);
   p.innerHTML = `
     <div class="kpis">
-      <div class="kpi"><span class="k">신계약 건수</span><span class="v">${k[0]}</span><span class="s">${k[1]}</span></div>
-      <div class="kpi"><span class="k">신계약 보험료</span><span class="v">${k[2]}</span><span class="s">${k[3]}</span></div>
-      <div class="kpi"><span class="k">목표 달성률(건수)</span><span class="v">${k[4]}</span><span class="s">${k[5]}</span></div>
-      <div class="kpi"><span class="k">가동률</span><span class="v">${k[6]}</span><span class="s">${k[7]}</span></div>
+      ${kpiCard("doc", "신계약 건수", k[0], change(k[1]))}
+      ${kpiCard("coin", "신계약 보험료", k[2], change(k[3]))}
+      ${kpiCard("pct", "목표 달성률(건수)", k[4], esc(k[5]))}
+      ${kpiCard("user", "가동률", k[6], esc(k[7]))}
     </div>
     ${partial ? `<p class="note">※ 목표는 상품군 구분 없이 지점 전체 기준이므로, 상품군을 일부만 선택하면 달성률이 낮게 보입니다.</p>` : ""}
     <div class="row2">
@@ -376,16 +414,16 @@ function renderPerf() {
         <div class="chart" id="c-trend"></div>
       </div>
       <div class="card">
-        <div class="head"><h2>상품군별 비중 (당월)</h2></div>
-        <div class="hbars">${d.share.map(r => `
+        <div class="head"><h2>상품군별 비중 (당월)</h2><span class="hint">가로 막대</span></div>
+        <div class="hbars">${d.share.map((r, i) => `
           <div class="hbar" data-tip="${r[0]} · ${r[3].toLocaleString("ko-KR")}건<br>${r[4].toLocaleString("ko-KR")}원">
-            <span>${r[0]}</span><div class="track"><div class="fill" style="width:${Math.max(r[1], 0)}%"></div></div>
+            <span>${r[0]}</span><div class="track"><div class="fill" style="width:${maxShare ? r[1] / maxShare * 100 : 0}%;background:var(--teal-${shadeRank(d.share, r)})"></div></div>
             <span class="val">${r[2]}</span></div>`).join("")}</div>
       </div>
     </div>
     <div class="card">
       <div class="head"><h2>지점별 실적 vs 목표 (당월)</h2>
-        <div class="legend"><span><i style="background:var(--accent)"></i>실적</span><span><i class="dash"></i>목표</span><span><i style="background:var(--critical)"></i>달성률 90% 미만</span></div></div>
+        <span class="hint">막대=실적, 점선=목표, 90% 미만은 빨간색</span></div>
       <div class="chart" id="c-branch"></div>
     </div>`;
   bindTips(p.querySelector(".hbars"));
@@ -393,7 +431,7 @@ function renderPerf() {
   const t = D.trend[`${S.branch}|${mask()}`], end = D.months.indexOf(S.ym) + 1, start = Math.max(0, end - 24);
   lineChart($("#c-trend"), D.months.slice(start, end), t[S.measure].slice(start, end), S.measure === "count" ? "건" : "원");
   barTarget($("#c-branch"), d.branch.map(r => ({
-    label: r[0], value: r[1], target: r[2], low: r[4], mark: r[4] ? `▼ ${r[3]}` : "",
+    label: r[0], value: r[1], target: r[2], low: r[4], mark: r[4] ? r[3] : "",
     tip: `${r[0]}<br>실적 ${r[1]}건 / 목표 ${r[2] == null ? "-" : r[2] + "건"}<br>달성률 ${r[3]}`,
   })));
 }
@@ -482,7 +520,7 @@ function renderFc() {
   p.innerHTML = `
     <div class="card">
       <div class="head"><h2>지점별 다음 분기(${qLabel}) 예측 vs 목표</h2>
-        <div class="legend"><span><i style="background:var(--accent)"></i>예측</span><span><i class="dash"></i>목표(가정)</span><span><i style="background:var(--critical)"></i>예측 달성률 ${D.gapRate}% 미만</span></div></div>
+        <span class="hint">막대=예측, 점선=목표(가정), ${D.gapRate}% 미만은 빨간색</span></div>
       <div class="chart" id="c-fc"></div>
     </div>
     <div class="tablewrap"><table>
