@@ -73,6 +73,12 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
 .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; cursor: pointer; color: var(--ink-2); white-space: nowrap; font-weight: 500; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+/* 좁은 화면에서도 탭 4개가 모두 보이도록 2x2로 배치 */
+@media (max-width: 640px) {
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; border-bottom: 0; overflow: visible; }
+  .tabs button { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 9px 8px; }
+  .tabs button[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+}
 .panel { display: flex; flex-direction: column; gap: 16px; }
 
 /* KPI */
