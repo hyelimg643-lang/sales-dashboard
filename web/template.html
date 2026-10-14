@@ -1,0 +1,550 @@
+<title>영업 성과 분석 대시보드</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: 좌측 필터 레일 + 우측 탭 작업 영역, 폰에서는 필터가 위로 접힌다 */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --line: #dfe3ea;
+  --line-soft: #eceff4;
+  --ink: #141a24;
+  --ink-2: #4c5565;
+  --ink-3: #7b8494;
+  --accent: #2a78d6;
+  --accent-soft: #e5effb;
+  --compare: #eb6834;
+  --critical: #c93636;
+  --critical-soft: #fbe9e9;
+  --warning: #a86d00;
+  --warning-soft: #fdf3dc;
+  --good: #16803c;
+  --target: #8a8f99;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --surface: #181d25; --line: #2a313c; --line-soft: #222832;
+    --ink: #eef1f5; --ink-2: #b4bccb; --ink-3: #848d9c;
+    --accent: #4b93ea; --accent-soft: #1b2b42; --compare: #e5733f;
+    --critical: #ef6b6b; --critical-soft: #3a1f22; --warning: #e0a63a; --warning-soft: #3a2f17;
+    --good: #4cc27a; --target: #9aa1ad; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151b; --surface: #181d25; --line: #2a313c; --line-soft: #222832;
+  --ink: #eef1f5; --ink-2: #b4bccb; --ink-3: #848d9c;
+  --accent: #4b93ea; --accent-soft: #1b2b42; --compare: #e5733f;
+  --critical: #ef6b6b; --critical-soft: #3a1f22; --warning: #e0a63a; --warning-soft: #3a2f17;
+  --good: #4cc27a; --target: #9aa1ad; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+.num, td.n, .tnum { font-variant-numeric: tabular-nums; }
+header.top { max-width: 1320px; margin: 0 auto 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+header.top h1 { font-size: 22px; font-weight: 700; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+.badge { font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--surface); }
+.shell { max-width: 1320px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .shell { grid-template-columns: minmax(0, 1fr); } }
+
+/* 필터 레일 */
+aside.filters { display: flex; flex-direction: column; gap: 16px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
+@media (max-width: 860px) { aside.filters { position: static; flex-direction: row; flex-wrap: wrap; } aside.filters > * { flex: 1 1 160px; } }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > label, .field > .lbl { font-size: 12px; color: var(--ink-2); font-weight: 500; letter-spacing: 0.02em; }
+select, button { font: inherit; color: var(--ink); }
+select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; width: 100%; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 5px 10px; cursor: pointer; user-select: none; font-size: 13px; }
+.chip input { accent-color: var(--accent); margin: 0; }
+.chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.note { font-size: 12px; color: var(--ink-3); margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 탭 */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; cursor: pointer; color: var(--ink-2); white-space: nowrap; font-weight: 500; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.panel { display: flex; flex-direction: column; gap: 16px; }
+
+/* KPI */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.kpis.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 720px) { .kpis, .kpis.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .kpi { padding: 12px; } .kpi .v { font-size: 18px; } }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; }
+.kpi .k { font-size: 12px; color: var(--ink-2); }
+.kpi .v { font-family: var(--font-num); font-size: 26px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.25; overflow-wrap: break-word; word-break: keep-all; }
+.kpi .s { font-size: 12px; color: var(--ink-3); }
+.kpi.crit { border-top: 3px solid var(--critical); } .kpi.crit .v { color: var(--critical); }
+.kpi.warn { border-top: 3px solid var(--warning); } .kpi.warn .v { color: var(--warning); }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 12px; min-width: 0; }
+.card h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.card .head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.card .cap { font-size: 12px; color: var(--ink-3); margin: 2px 0 8px; }
+.row2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+.row2.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 960px) { .row2, .row2.even { grid-template-columns: minmax(0, 1fr); } }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 4px 12px; cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend i.dash { height: 0; border-top: 2px dashed var(--target); border-radius: 0; width: 16px; vertical-align: 3px; }
+
+/* 차트 */
+.chart { width: 100%; position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--font-body); font-size: 11px; fill: var(--ink-3); }
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.hbars { display: flex; flex-direction: column; gap: 10px; padding: 6px 0; }
+.hbar { display: grid; grid-template-columns: 40px minmax(0, 1fr) 56px; align-items: center; gap: 8px; font-size: 13px; }
+.hbar .track { height: 22px; background: var(--line-soft); border-radius: 4px; overflow: hidden; }
+.hbar .fill { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+.hbar .val { font-family: var(--font-num); font-size: 12px; color: var(--ink-2); text-align: right; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--ink); color: var(--bg); font-size: 12px; padding: 6px 9px; border-radius: 6px; white-space: nowrap; }
+
+/* 표 */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; white-space: nowrap; }
+th { font-weight: 500; color: var(--ink-2); background: var(--bg); font-size: 12px; }
+td.n, th.n { text-align: right; font-family: var(--font-num); font-size: 12.5px; }
+td.wrap { white-space: normal; min-width: 220px; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.pick { cursor: pointer; }
+tr.pick:hover td { background: var(--accent-soft); }
+tr.pick[aria-selected="true"] td { background: var(--accent-soft); box-shadow: inset 0 0 0 0 var(--accent); }
+tr.pick[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 9px; }
+.pill.crit { color: var(--critical); background: var(--critical-soft); }
+.pill.warn { color: var(--warning); background: var(--warning-soft); }
+.pill.ok { color: var(--ink-2); background: var(--line-soft); font-weight: 500; }
+.low { color: var(--critical); font-weight: 600; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.toast { font-size: 12px; color: var(--good); }
+.empty { padding: 28px 16px; text-align: center; color: var(--ink-3); border: 1px dashed var(--line); border-radius: 8px; }
+.warnbox { padding: 10px 14px; border-radius: 8px; background: var(--warning-soft); color: var(--warning); font-size: 13px; }
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; }
+details summary { cursor: pointer; font-weight: 500; }
+details[open] summary { margin-bottom: 10px; }
+details ul { margin: 0 0 12px; padding-left: 18px; color: var(--ink-2); }
+
+/* 보고서 미리보기: 문서처럼 */
+.paper { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 28px clamp(16px, 4vw, 40px); max-width: 860px; }
+.paper h1 { font-size: 20px; margin: 0 0 12px; text-wrap: balance; }
+.paper h2 { font-size: 16px; margin: 26px 0 10px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.paper ul { padding-left: 20px; margin: 8px 0; } .paper li { margin: 3px 0; }
+.paper p { margin: 8px 0; }
+.paper table { margin: 8px 0; display: block; overflow-x: auto; width: max-content; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.paper td:not(:first-child):not(:nth-child(2)), .paper th:not(:first-child):not(:nth-child(2)) { font-variant-numeric: tabular-nums; }
+footer.foot { max-width: 1320px; margin: 24px auto 0; font-size: 12px; color: var(--ink-3); }
+@media (prefers-reduced-motion: no-preference) { .hbar .fill { transition: width .3s ease; } }
+</style>
+
+<header class="top">
+  <h1>영업 성과 분석 대시보드</h1>
+  <span class="badge">PoC · 더미데이터</span>
+  <span class="badge" id="asof">기준 2026-09</span>
+</header>
+
+<div class="shell">
+  <aside class="filters" aria-label="필터">
+    <div class="field">
+      <label for="f-ym">기준 월</label>
+      <select id="f-ym"></select>
+    </div>
+    <div class="field">
+      <label for="f-branch">지점</label>
+      <select id="f-branch"></select>
+    </div>
+    <div class="field">
+      <span class="lbl">상품군</span>
+      <div class="checks" id="f-groups"></div>
+    </div>
+    <div class="field" id="grade-field">
+      <span class="lbl">등급 (② 위험 설계사)</span>
+      <div class="checks" id="f-grades"></div>
+    </div>
+    <p class="note">필터는 모든 탭에 공통 적용</p>
+  </aside>
+
+  <main>
+    <nav class="tabs" role="tablist">
+      <button role="tab" id="t-perf" data-tab="perf">① 성과 대시보드</button>
+      <button role="tab" id="t-risk" data-tab="risk">② 위험 설계사</button>
+      <button role="tab" id="t-fc" data-tab="fc">③ 실적 예측</button>
+      <button role="tab" id="t-report" data-tab="report">④ 월간 보고서</button>
+    </nav>
+
+    <section class="panel" id="p-perf" role="tabpanel"></section>
+    <section class="panel" id="p-risk" role="tabpanel" hidden></section>
+    <section class="panel" id="p-fc" role="tabpanel" hidden></section>
+    <section class="panel" id="p-report" role="tabpanel" hidden></section>
+  </main>
+</div>
+<footer class="foot">모든 수치는 가상 더미데이터 기준입니다. 계산 규칙은 docs/rules.md를 따르며 Streamlit 앱과 같은 계산 결과를 담고 있습니다.</footer>
+<div id="tip" hidden></div>
+
+<script>
+const D = /*__DATA__*/null;
+const GRADES = ["고위험", "관찰", "정상"];
+const S = {
+  ym: "2026-09", branch: "ALL", groups: new Set(D.groups), grades: new Set(["고위험", "관찰"]),
+  tab: "perf", measure: "count", agent: null, reportYm: null, reportShown: null,
+};
+try { const t = localStorage.getItem("dash-tab"); if (t) S.tab = t; } catch (e) {}
+if (["perf", "risk", "fc", "report"].includes(location.hash.slice(1))) S.tab = location.hash.slice(1);
+
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const mask = () => D.groups.map(g => S.groups.has(g) ? "1" : "0").join("");
+const branchName = id => (D.branches.find(b => b[0] === id) || [, ""])[1];
+const fmtInt = v => Math.round(v).toLocaleString("ko-KR");
+
+/* ---------- 툴팁 ---------- */
+const tip = $("#tip");
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.hidden = false;
+  const x = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + "px"; tip.style.top = (ev.clientY - tip.offsetHeight - 10) + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+function bindTips(el) {
+  el.querySelectorAll("[data-tip]").forEach(n => {
+    n.addEventListener("pointermove", ev => showTip(n.dataset.tip, ev));
+    n.addEventListener("pointerleave", hideTip);
+  });
+}
+
+/* ---------- 차트 ---------- */
+function niceStep(v, ticks) {
+  const raw = Math.max(v, 1e-9) / ticks, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+}
+/* 축 최대값: 4칸 눈금이 깔끔한 수가 되도록 올림 */
+function niceMax(v) {
+  if (v <= 0) return 4;
+  return niceStep(v, 4) * 4;
+}
+function axisFmt(v) {
+  if (v >= 1e8) return (v / 1e8).toLocaleString("ko-KR") + "억";
+  if (v >= 1e4) return (v / 1e4).toLocaleString("ko-KR") + "만";
+  return v.toLocaleString("ko-KR");
+}
+function yGrid(W, H, pad, max, ticks = 4) {
+  let s = "";
+  for (let i = 0; i <= ticks; i++) {
+    const v = max * i / ticks, y = H - pad.b - (H - pad.t - pad.b) * i / ticks;
+    s += `<line class="${i ? "grid" : "axis"}" x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}"/>`;
+    s += `<text x="${pad.l - 8}" y="${y + 4}" text-anchor="end">${axisFmt(v)}</text>`;
+  }
+  return s;
+}
+
+function lineChart(el, labels, values, unit) {
+  const W = Math.max(el.clientWidth, 300), H = 260, pad = { t: 14, r: 14, b: 26, l: 48 };
+  const max = niceMax(Math.max(...values) * 1.1);
+  const x = i => pad.l + (W - pad.l - pad.r) * (labels.length === 1 ? 0.5 : i / (labels.length - 1));
+  const y = v => H - pad.b - (H - pad.t - pad.b) * v / max;
+  const acc = css("--accent");
+  let s = yGrid(W, H, pad, max);
+  const pts = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  s += `<polygon points="${x(0)},${y(0)} ${pts} ${x(values.length - 1)},${y(0)}" fill="${acc}" fill-opacity="0.08"/>`;
+  s += `<polyline points="${pts}" fill="none" stroke="${acc}" stroke-width="2" stroke-linejoin="round"/>`;
+  const step = labels.length > 12 ? Math.ceil(labels.length / (W < 500 ? 4 : 6)) : 1;
+  labels.forEach((l, i) => {
+    if ((labels.length - 1 - i) % step === 0) s += `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${l}</text>`;
+  });
+  const last = values.length - 1;
+  s += `<circle cx="${x(last)}" cy="${y(values[last])}" r="4.5" fill="${acc}" stroke="${css("--surface")}" stroke-width="2"/>`;
+  const bw = (W - pad.l - pad.r) / Math.max(labels.length - 1, 1);
+  values.forEach((v, i) => {
+    s += `<rect x="${x(i) - bw / 2}" y="${pad.t}" width="${bw}" height="${H - pad.t - pad.b}" fill="transparent" data-tip="${labels[i]}<br>${fmtInt(v)}${unit}" data-i="${i}"/>`;
+  });
+  s += `<circle class="hov" r="4" fill="${acc}" visibility="hidden"/>`;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 추이">${s}</svg>`;
+  const hov = el.querySelector(".hov");
+  el.querySelectorAll("rect[data-i]").forEach(r => {
+    r.addEventListener("pointerenter", () => { const i = +r.dataset.i; hov.setAttribute("cx", x(i)); hov.setAttribute("cy", y(values[i])); hov.setAttribute("visibility", "visible"); });
+    r.addEventListener("pointerleave", () => hov.setAttribute("visibility", "hidden"));
+  });
+  bindTips(el);
+}
+
+/* 막대 + 목표 점선. items: {label, value, target, low, mark, tip} */
+function barTarget(el, items, fmtV) {
+  const W = Math.max(el.clientWidth, 300), H = 280, pad = { t: 24, r: 10, b: 28, l: 40 };
+  const max = niceMax(Math.max(...items.map(d => Math.max(d.value, d.target || 0))) * 1.15);
+  const slot = (W - pad.l - pad.r) / items.length, bw = Math.min(slot * 0.5, 90);
+  const y = v => H - pad.b - (H - pad.t - pad.b) * v / max;
+  let s = yGrid(W, H, pad, max);
+  items.forEach((d, i) => {
+    const cx = pad.l + slot * (i + 0.5), col = d.low ? css("--critical") : css("--accent");
+    const h = y(0) - y(d.value), r = Math.min(4, h);
+    s += `<path d="M${cx - bw / 2},${y(0)} V${y(d.value) + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${y(0)} Z" fill="${col}" data-tip="${esc(d.tip)}"/>`;
+    if (d.target != null) s += `<line x1="${cx - slot * 0.4}" x2="${cx + slot * 0.4}" y1="${y(d.target)}" y2="${y(d.target)}" stroke="${css("--target")}" stroke-width="2" stroke-dasharray="6 4"/>`;
+    if (d.mark) s += `<text x="${cx}" y="${Math.min(y(d.value), d.target != null ? y(d.target) : 1e9) - 7}" text-anchor="middle" style="fill:${css("--critical")};font-weight:600">${esc(d.mark)}</text>`;
+    s += `<text x="${cx}" y="${H - 8}" text-anchor="middle" style="fill:${css("--ink-2")}">${esc(d.label)}</text>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="실적과 목표">${s}</svg>`;
+  bindTips(el);
+}
+
+function simpleBars(el, labels, values) {
+  const W = Math.max(el.clientWidth, 280), H = 220, pad = { t: 12, r: 8, b: 26, l: 30 };
+  const max = Math.max(niceMax(Math.max(...values, 1)), 4);
+  const slot = (W - pad.l - pad.r) / labels.length, bw = slot * 0.6;
+  const y = v => H - pad.b - (H - pad.t - pad.b) * v / max;
+  let s = yGrid(W, H, pad, max);
+  labels.forEach((l, i) => {
+    const cx = pad.l + slot * (i + 0.5), h = y(0) - y(values[i]), r = Math.min(3, h);
+    if (values[i] > 0) s += `<path d="M${cx - bw / 2},${y(0)} V${y(values[i]) + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${y(0)} Z" fill="${css("--accent")}" data-tip="${l}<br>${values[i]}건"/>`;
+    else s += `<rect x="${cx - bw / 2}" y="${pad.t}" width="${bw}" height="${H - pad.t - pad.b}" fill="transparent" data-tip="${l}<br>0건"/>`;
+    if (i % (W < 420 ? 3 : 2) === (labels.length - 1) % (W < 420 ? 3 : 2)) s += `<text x="${cx}" y="${H - 8}" text-anchor="middle">${l.slice(2)}</text>`;
+  });
+  // 최근 3개월 0건이면 표시
+  if (values.slice(-3).every(v => v === 0)) {
+    const x0 = pad.l + slot * (labels.length - 3);
+    s += `<rect x="${x0}" y="${pad.t}" width="${slot * 3}" height="${H - pad.t - pad.b}" fill="${css("--critical")}" fill-opacity="0.07"/>`;
+    s += `<text x="${x0 + slot * 1.5}" y="${y(0) - 8}" text-anchor="middle" style="fill:${css("--critical")};font-weight:600">최근 3개월 0건</text>`;
+  }
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 판매 건수">${s}</svg>`;
+  bindTips(el);
+}
+
+function groupedBars(el, cats, a, b) {
+  const W = Math.max(el.clientWidth, 280), H = 220, pad = { t: 20, r: 8, b: 26, l: 36 };
+  const max = niceMax(Math.max(...a, ...b) * 1.15);
+  const slot = (W - pad.l - pad.r) / cats.length, bw = slot * 0.3;
+  const y = v => H - pad.b - (H - pad.t - pad.b) * v / max;
+  let s = yGrid(W, H, pad, max).replace(/>(\d[\d,.]*)<\/text>/g, ">$1%</text>");
+  cats.forEach((c, i) => {
+    const cx = pad.l + slot * (i + 0.5);
+    [[a[i], css("--accent"), -1, "본인"], [b[i], css("--compare"), 1, "전사 평균"]].forEach(([v, col, side, nm]) => {
+      const x0 = side < 0 ? cx - bw - 1 : cx + 1, h = y(0) - y(v), r = Math.min(3, h);
+      s += `<path d="M${x0},${y(0)} V${y(v) + r} q0,-${r} ${r},-${r} H${x0 + bw - r} q${r},0 ${r},${r} V${y(0)} Z" fill="${col}" data-tip="${c} · ${nm}<br>${v.toFixed(1)}%"/>`;
+      s += `<text x="${x0 + bw / 2}" y="${y(v) - 5}" text-anchor="middle">${v.toFixed(1)}</text>`;
+    });
+    s += `<text x="${cx}" y="${H - 8}" text-anchor="middle" style="fill:${css("--ink-2")}">${c}</text>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="상품군 구성 비교">${s}</svg>`;
+  bindTips(el);
+}
+
+/* ---------- ① 성과 대시보드 ---------- */
+function renderPerf() {
+  const p = $("#p-perf");
+  if (!S.groups.size) { p.innerHTML = `<div class="warnbox">상품군을 하나 이상 선택하세요.</div>`; return; }
+  const key = `${S.ym}|${S.branch}|${mask()}`, d = D.perf[key];
+  const k = d.kpi, partial = S.groups.size < 4;
+  const lowRow = d.branch.find(r => r[4]);
+  p.innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span class="k">신계약 건수</span><span class="v">${k[0]}</span><span class="s">${k[1]}</span></div>
+      <div class="kpi"><span class="k">신계약 보험료</span><span class="v">${k[2]}</span><span class="s">${k[3]}</span></div>
+      <div class="kpi"><span class="k">목표 달성률(건수)</span><span class="v">${k[4]}</span><span class="s">${k[5]}</span></div>
+      <div class="kpi"><span class="k">가동률</span><span class="v">${k[6]}</span><span class="s">${k[7]}</span></div>
+    </div>
+    ${partial ? `<p class="note">※ 목표는 상품군 구분 없이 지점 전체 기준이므로, 상품군을 일부만 선택하면 달성률이 낮게 보입니다.</p>` : ""}
+    <div class="row2">
+      <div class="card">
+        <div class="head"><h2>월별 신계약 추이 (24개월)</h2>
+          <div class="seg" role="group" aria-label="지표 전환">
+            <button data-m="count" aria-pressed="${S.measure === "count"}">건수</button>
+            <button data-m="premium" aria-pressed="${S.measure === "premium"}">보험료</button>
+          </div></div>
+        <div class="chart" id="c-trend"></div>
+      </div>
+      <div class="card">
+        <div class="head"><h2>상품군별 비중 (당월)</h2></div>
+        <div class="hbars">${d.share.map(r => `
+          <div class="hbar" data-tip="${r[0]} · ${r[3].toLocaleString("ko-KR")}건<br>${r[4].toLocaleString("ko-KR")}원">
+            <span>${r[0]}</span><div class="track"><div class="fill" style="width:${Math.max(r[1], 0)}%"></div></div>
+            <span class="val">${r[2]}</span></div>`).join("")}</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head"><h2>지점별 실적 vs 목표 (당월)</h2>
+        <div class="legend"><span><i style="background:var(--accent)"></i>실적</span><span><i class="dash"></i>목표</span><span><i style="background:var(--critical)"></i>달성률 90% 미만</span></div></div>
+      <div class="chart" id="c-branch"></div>
+    </div>`;
+  bindTips(p.querySelector(".hbars"));
+  p.querySelectorAll(".seg button").forEach(b => b.onclick = () => { S.measure = b.dataset.m; renderPerf(); });
+  const t = D.trend[`${S.branch}|${mask()}`], end = D.months.indexOf(S.ym) + 1, start = Math.max(0, end - 24);
+  lineChart($("#c-trend"), D.months.slice(start, end), t[S.measure].slice(start, end), S.measure === "count" ? "건" : "원");
+  barTarget($("#c-branch"), d.branch.map(r => ({
+    label: r[0], value: r[1], target: r[2], low: r[4], mark: r[4] ? `▼ ${r[3]}` : "",
+    tip: `${r[0]}<br>실적 ${r[1]}건 / 목표 ${r[2] == null ? "-" : r[2] + "건"}<br>달성률 ${r[3]}`,
+  })));
+}
+
+/* ---------- ② 위험 설계사 ---------- */
+function riskRows() {
+  return D.risk[S.ym].filter(r => S.branch === "ALL" || r[2] === S.branch);
+}
+function riskCsv(rows) {
+  const head = ["설계사", "지점", "점수", "등급", "해당 사유", "직전3M→최근3M", "유지율"];
+  const q = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  return [head, ...rows.map(r => [r[1], r[3], r[4], r[5], r[6], r[7], r[8]])].map(r => r.map(q).join(",")).join("\n");
+}
+async function copyText(text, btn) {
+  const msg = btn.parentElement.querySelector(".toast");
+  try { await navigator.clipboard.writeText(text); msg.textContent = "복사했습니다"; }
+  catch (e) {
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand("copy"); } catch (e2) {}
+    ta.remove(); msg.textContent = ok ? "복사했습니다" : "복사하지 못했습니다. 브라우저에서 다시 시도하세요.";
+  }
+  setTimeout(() => { msg.textContent = ""; }, 2500);
+}
+function renderRisk() {
+  const p = $("#p-risk"), all = riskRows();
+  const cnt = g => all.filter(r => r[5] === g).length;
+  const list = all.filter(r => S.grades.has(r[5]));
+  if (S.agent && !list.some(r => r[0] === S.agent)) S.agent = null;
+  const pill = g => `<span class="pill ${g === "고위험" ? "crit" : g === "관찰" ? "warn" : "ok"}">${g}</span>`;
+  p.innerHTML = `
+    <div class="kpis three">
+      <div class="kpi crit"><span class="k">고위험 (60점↑)</span><span class="v">${cnt("고위험")}명</span><span class="s">코칭·교육 대상</span></div>
+      <div class="kpi warn"><span class="k">관찰 (30~59점)</span><span class="v">${cnt("관찰")}명</span><span class="s">지점장 모니터링</span></div>
+      <div class="kpi"><span class="k">정상</span><span class="v">${cnt("정상")}명</span><span class="s">재직 ${all.length}명 중</span></div>
+    </div>
+    <div class="card">
+      <div class="head"><h2>위험 설계사 목록 (점수 높은 순)</h2>
+        <div class="actions"><span class="toast" aria-live="polite"></span><button class="btn" id="b-csv">CSV 복사</button></div></div>
+      <p class="cap">행을 누르면 아래에 상세가 표시됩니다. CSV 복사 후 엑셀에 붙여넣을 수 있습니다.</p>
+      ${list.length ? `<div class="tablewrap"><table>
+        <thead><tr><th>설계사</th><th>지점</th><th class="n">점수</th><th>등급</th><th>해당 사유</th><th class="n">직전3M→최근3M</th><th class="n">유지율</th></tr></thead>
+        <tbody>${list.map(r => `<tr class="pick" tabindex="0" data-a="${r[0]}" aria-selected="${r[0] === S.agent}">
+          <td>${r[1]}</td><td>${r[3]}</td><td class="n${r[4] >= 60 ? " low" : ""}">${r[4]}</td><td>${pill(r[5])}</td>
+          <td class="wrap">${r[6] || "-"}</td><td class="n">${r[7]}</td><td class="n">${r[8]}</td></tr>`).join("")}</tbody></table></div>`
+        : `<div class="empty">선택한 등급에 해당하는 설계사가 없습니다. 사이드바에서 등급을 선택하세요.</div>`}
+    </div>
+    <div id="agent-detail"></div>`;
+  $("#b-csv").onclick = e => copyText(riskCsv(list), e.currentTarget);
+  p.querySelectorAll("tr.pick").forEach(tr => {
+    const pick = () => { S.agent = tr.dataset.a === S.agent ? null : tr.dataset.a; renderRisk(); };
+    tr.onclick = pick; tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+  });
+  renderAgent(all);
+}
+function renderAgent(all) {
+  const box = $("#agent-detail");
+  if (!S.agent) { box.innerHTML = `<div class="empty">표에서 설계사를 선택하면 월별 판매 건수와 상품군 구성이 표시됩니다.</div>`; return; }
+  const r = all.find(x => x[0] === S.agent), end = D.months.indexOf(S.ym) + 1;
+  const months12 = D.months.slice(Math.max(0, end - 12), end);
+  const mg = D.agentMG[S.agent];
+  const counts = months12.map(ym => mg[D.months.indexOf(ym)].reduce((a, b) => a + b, 0));
+  const sumTo = arr => D.groups.map((_, gi) => arr.slice(0, end).reduce((a, row) => a + row[gi], 0));
+  const mine = sumTo(mg), comp = D.groups.map(() => 0);
+  Object.values(D.agentMG).forEach(a => sumTo(a).forEach((v, gi) => comp[gi] += v));
+  const share = arr => { const t = arr.reduce((a, b) => a + b, 0); return arr.map(v => t ? v / t * 100 : 0); };
+  box.innerHTML = `<div class="row2 even">
+    <div class="card"><div class="head"><h2>${r[1]}: 월별 판매 건수 (12개월)</h2></div>
+      <div class="chart" id="c-agent"></div>
+      <p class="cap">${r[3]} · 점수 ${r[4]}점 · ${r[6] || "해당 사유 없음"}</p></div>
+    <div class="card"><div class="head"><h2>${r[1]}: 상품군 구성 vs 전사 평균</h2>
+      <div class="legend"><span><i style="background:var(--accent)"></i>본인</span><span><i style="background:var(--compare)"></i>전사 평균</span></div></div>
+      <div class="chart" id="c-mix"></div>
+      <p class="cap">기준 월까지 전체 기간 계약 건수 기준 (%)</p></div></div>`;
+  simpleBars($("#c-agent"), months12, counts);
+  groupedBars($("#c-mix"), D.groups, share(mine), share(comp));
+}
+
+/* ---------- ③ 실적 예측 ---------- */
+function renderFc() {
+  const p = $("#p-fc"), f = D.forecast[S.ym];
+  if (!f) { p.innerHTML = `<div class="warnbox">다음 분기 계절지수에 필요한 전년 같은 달 실적이 없어 예측할 수 없습니다. 기준 월을 2025-09 이후로 선택하세요.</div>`; return; }
+  const rows = f.rows.filter(r => S.branch === "ALL" || r[0] === S.branch);
+  const m0 = f.months[0], [yy, mm] = m0.split("-").map(Number);
+  const qLabel = [1, 4, 7, 10].includes(mm) ? `${yy}년 ${Math.ceil(mm / 3)}분기` : `${f.months[0]} ~ ${f.months[2]}`;
+  const isGap = r => r[7] !== "정상";
+  p.innerHTML = `
+    <div class="card">
+      <div class="head"><h2>지점별 다음 분기(${qLabel}) 예측 vs 목표</h2>
+        <div class="legend"><span><i style="background:var(--accent)"></i>예측</span><span><i class="dash"></i>목표(가정)</span><span><i style="background:var(--critical)"></i>예측 달성률 ${D.gapRate}% 미만</span></div></div>
+      <div class="chart" id="c-fc"></div>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>지점</th><th class="n">예측</th><th class="n">목표(가정)</th><th class="n">예측 달성률</th><th>판정</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${r[1]}</td><td class="n">${r[3]}</td><td class="n">${r[5]}</td><td class="n${isGap(r) ? " low" : ""}">${r[6]}</td>
+        <td>${isGap(r) ? `<span class="pill crit">${r[7]}</span>` : `<span class="pill ok">${r[7]}</span>`}</td></tr>`).join("")}</tbody></table></div>
+    <details><summary>계산 근거</summary>
+      <ul>
+        <li>월 예측 = 지점별 최근 3개월 월평균 건수 × 계절지수</li>
+        <li>계절지수 = 전년 같은 달 전사 건수 ÷ 2025년 1~12월 전사 월평균 건수</li>
+        <li>다음 분기 예측 = 3개월 예측의 합, 목표(가정) = 최근 3개월 목표 평균 × 3</li>
+        <li>예측 달성률이 ${D.gapRate}% 미만이면 "괴리 예상"</li>
+      </ul>
+      <div class="tablewrap"><table>
+        <thead><tr><th>지점</th><th class="n">최근 3개월 평균</th>${f.months.map((mo, i) => `<th class="n">${mo} 예측<br><span style="font-weight:400">계절지수 ${f.seasonal[i]}</span></th>`).join("")}<th class="n">합계</th></tr></thead>
+        <tbody>${rows.map(r => `<tr><td>${r[1]}</td><td class="n">${r[8]}</td>${r[9].map(v => `<td class="n">${v}</td>`).join("")}<td class="n">${r[3]}</td></tr>`).join("")}</tbody></table></div>
+    </details>
+    <p class="note">※ 예측은 지점 전체 건수 기준이며 상품군 필터는 적용하지 않습니다.</p>`;
+  barTarget($("#c-fc"), rows.map(r => ({
+    label: r[1], value: r[2], target: r[4], low: isGap(r), mark: isGap(r) ? `⚠ ${r[6]}` : "",
+    tip: `${r[1]}<br>예측 ${r[3]}건 / 목표 ${r[5]}건<br>달성률 ${r[6]}`,
+  })));
+}
+
+/* ---------- ④ 월간 보고서 ---------- */
+function renderReport() {
+  const p = $("#p-report");
+  if (!S.reportYm) S.reportYm = S.ym;
+  const shown = S.reportShown && D.reports[S.reportShown];
+  p.innerHTML = `
+    <div class="actions">
+      <div class="field" style="min-width:160px"><label for="r-ym">보고 월</label><select id="r-ym">${D.months.map(m => `<option${m === S.reportYm ? " selected" : ""}>${m}</option>`).join("")}</select></div>
+      <button class="btn primary" id="r-go" style="align-self:flex-end">보고서 생성</button>
+      ${shown ? `<button class="btn" id="r-copy" style="align-self:flex-end">마크다운 복사</button><span class="toast" aria-live="polite" style="align-self:flex-end"></span>` : ""}
+    </div>
+    <p class="note">보고서는 양식대로 전 지점·전 상품군 기준으로 작성되며, 지점·상품군 필터는 적용하지 않습니다. 이 웹 페이지에서는 파일 저장 대신 마크다운을 복사해 .md 파일로 붙여넣으세요.</p>
+    ${shown ? `<article class="paper">${D.reports[S.reportShown].html}</article>` : `<div class="empty">보고 월을 고르고 "보고서 생성"을 누르세요.</div>`}`;
+  $("#r-ym").onchange = e => { S.reportYm = e.target.value; };
+  $("#r-go").onclick = () => { S.reportShown = S.reportYm; renderReport(); };
+  if (shown) $("#r-copy").onclick = e => copyText(D.reports[S.reportShown].md, e.currentTarget);
+}
+
+/* ---------- 공통 ---------- */
+const renderers = { perf: renderPerf, risk: renderRisk, fc: renderFc, report: renderReport };
+function render() {
+  $("#asof").textContent = `기준 ${S.ym}`;
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === S.tab));
+  Object.keys(renderers).forEach(t => { $("#p-" + t).hidden = t !== S.tab; });
+  $("#grade-field").style.opacity = S.tab === "risk" ? "1" : "0.6";
+  hideTip();
+  renderers[S.tab]();
+}
+function setup() {
+  $("#f-ym").innerHTML = D.months.map(m => `<option${m === S.ym ? " selected" : ""}>${m}</option>`).join("");
+  $("#f-branch").innerHTML = `<option value="ALL">전체</option>` + D.branches.map(b => `<option value="${b[0]}">${b[1]}</option>`).join("");
+  $("#f-groups").innerHTML = D.groups.map((g, i) => `<label class="chip" for="g-${i}"><input type="checkbox" id="g-${i}" value="${g}" checked>${g}</label>`).join("");
+  $("#f-grades").innerHTML = GRADES.map((g, i) => `<label class="chip" for="gr-${i}"><input type="checkbox" id="gr-${i}" value="${g}"${S.grades.has(g) ? " checked" : ""}>${g}</label>`).join("");
+  $("#f-ym").onchange = e => { S.ym = e.target.value; S.reportYm = null; render(); };
+  $("#f-branch").onchange = e => { S.branch = e.target.value; render(); };
+  $("#f-groups").onchange = e => { e.target.checked ? S.groups.add(e.target.value) : S.groups.delete(e.target.value); render(); };
+  $("#f-grades").onchange = e => { e.target.checked ? S.grades.add(e.target.value) : S.grades.delete(e.target.value); render(); };
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+    S.tab = b.dataset.tab; try { localStorage.setItem("dash-tab", S.tab); } catch (e) {} render();
+  });
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+  try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render); } catch (e) {}
+  new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  render();
+}
+setup();
+</script>
