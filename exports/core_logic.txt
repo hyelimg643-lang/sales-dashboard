@@ -1,0 +1,1142 @@
+영업 성과 분석 대시보드 PoC — 핵심 로직 원본 추출
+추출 시각: 2026-10-16 02:00  /  추출 대상 폴더: sales-dashboard
+규칙: 코드는 새로 쓰거나 고치거나 요약하지 않고 원본 그대로 옮김. 화면 디자인·스타일 코드(CSS, 테마, 화면 배치)와 설명 문서는 제외.
+인증정보: 코드에 API 키·비밀번호 등 인증정보 없음 (가린 값 0개)
+
+포함 목록:
+  1. metrics.py (전체, 461줄, sha256 f6e3954cd4064e01)
+  2. report.py (전체, 200줄, sha256 7a521f57edcfadac)
+  3. export.py (전체, 178줄, sha256 589e3027745a807d)
+  4. make_report.py (전체, 41줄, sha256 5b91903eeed3147e)
+  5. web/build_web.py (전체, 158줄, sha256 ee6065ba1ff8aab6)
+  6. app.py → fmt_won (67~68줄, 원본 그대로)
+  7. app.py → fmt_pct (71~72줄, 원본 그대로)
+  8. app.py → get_data (106~123줄, 원본 그대로)
+  9. app.py → template_zip (126~134줄, 원본 그대로)
+  10. app.py → template_xlsx (137~144줄, 원본 그대로)
+  11. app.py → report_files (147~149줄, 원본 그대로)
+
+====================================================================================================
+### metrics.py (전체, 461줄, sha256 f6e3954cd4064e01)
+====================================================================================================
+"""지표 계산 로직 (docs/rules.md 기준). 화면 코드(app.py)와 분리한다."""
+import io
+from pathlib import Path
+
+import pandas as pd
+
+DATA_DIR = Path(__file__).parent / "data"
+BASE_DATE = pd.Timestamp("2026-09-30")
+PRODUCT_GROUPS = ["종신", "건강", "연금", "저축"]
+
+
+# ---------------------------------------------------------------- 데이터 로드
+TABLES = {  # 파일 이름: (표시명, 필수 열)
+    "branches": ("지점", ["branch_id", "branch_name", "region"]),
+    "agents": ("설계사", ["agent_id", "agent_name", "branch_id", "appoint_date", "status", "db_source"]),
+    "products": ("상품", ["product_id", "product_name", "product_group"]),
+    "contracts": ("신계약", ["contract_id", "contract_date", "agent_id", "product_id", "monthly_premium",
+                             "status", "cancel_date", "is_replacement"]),
+    "targets": ("목표", ["year_month", "branch_id", "target_count", "target_premium"]),
+}
+ALLOWED = {  # (파일, 열): 허용 값
+    ("agents", "status"): ["재직", "해촉"],
+    ("contracts", "status"): ["유지", "해지", "실효"],
+    ("products", "product_group"): PRODUCT_GROUPS,
+}
+DATES = {"agents": ["appoint_date"], "contracts": ["contract_date", "cancel_date"]}
+NUMBERS = {"contracts": ["monthly_premium", "is_replacement"], "targets": ["target_count", "target_premium"]}
+
+
+def read_csv(source) -> pd.DataFrame:
+    """CSV 읽기. 엑셀에서 저장한 CP949 파일도 받는다."""
+    raw = source.read_bytes() if isinstance(source, Path) else source
+    for enc in ("utf-8-sig", "cp949"):
+        try:
+            return pd.read_csv(io.BytesIO(raw), encoding=enc, dtype={"year_month": str})
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("파일 인코딩을 읽을 수 없습니다 (UTF-8 또는 CP949로 저장해 주세요).")
+
+
+def read_upload(filename: str, content: bytes) -> dict:
+    """올린 파일 하나를 {표 이름: DataFrame}으로 읽는다.
+
+    CSV는 파일 이름으로, 엑셀은 파일 이름(첫 시트) 또는 시트 이름으로 표를 정한다.
+    """
+    name = Path(filename).stem.lower()
+    if Path(filename).suffix.lower() == ".csv":
+        return {name: read_csv(content)} if name in TABLES else {}
+    sheets = pd.read_excel(io.BytesIO(content), sheet_name=None, dtype={"year_month": str})
+    if name in TABLES:
+        return {name: _clean_excel(next(iter(sheets.values())))}
+    return {s.strip().lower(): _clean_excel(df) for s, df in sheets.items() if s.strip().lower() in TABLES}
+
+
+def _clean_excel(df: pd.DataFrame) -> pd.DataFrame:
+    """엑셀이 날짜로 바꿔 둔 연월(2026-09-01 00:00:00)을 2026-09로 되돌린다."""
+    df = df.copy()
+    if "year_month" in df.columns:
+        df["year_month"] = df["year_month"].astype(str).str.replace(r"^(\d{4}-\d{2})-\d{2}.*$", r"\1", regex=True)
+    return df
+
+
+def read_tables(data_dir: Path = DATA_DIR) -> dict:
+    return {name: read_csv(data_dir / f"{name}.csv") for name in TABLES}
+
+
+def validate_tables(raw: dict) -> list:
+    """필수 열, 날짜·숫자 형식, 허용 값, ID 연결을 검사해 오류 문구 목록을 돌려준다."""
+    errors = []
+    for name, (label, cols) in TABLES.items():
+        df = raw[name]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            errors.append(f"{name}.csv({label}): 필수 열이 없습니다: {', '.join(missing)}")
+        elif df.empty:
+            errors.append(f"{name}.csv({label}): 데이터 행이 없습니다.")
+    if errors:
+        return errors  # 열이 맞아야 아래 검사가 의미 있다
+
+    for name, cols in DATES.items():
+        for c in cols:
+            bad = pd.to_datetime(raw[name][c], errors="coerce").isna() & raw[name][c].notna()
+            if bad.any():
+                errors.append(f"{name}.csv: {c} 열에 날짜가 아닌 값이 {bad.sum()}개 있습니다 (예: {raw[name].loc[bad, c].iloc[0]}).")
+    for name, cols in NUMBERS.items():
+        for c in cols:
+            bad = pd.to_numeric(raw[name][c], errors="coerce").isna()
+            if bad.any():
+                errors.append(f"{name}.csv: {c} 열에 숫자가 아닌 값이나 빈 칸이 {bad.sum()}개 있습니다.")
+    bad_ym = ~raw["targets"]["year_month"].astype(str).str.fullmatch(r"\d{4}-\d{2}")
+    if bad_ym.any():
+        errors.append(f"targets.csv: year_month는 2026-09 형식이어야 합니다 (예: {raw['targets'].loc[bad_ym, 'year_month'].iloc[0]}).")
+    for (name, c), allowed in ALLOWED.items():
+        bad = sorted(set(raw[name][c].dropna().astype(str)) - set(allowed))
+        if bad:
+            errors.append(f"{name}.csv: {c} 열에 허용되지 않은 값이 있습니다: {', '.join(bad[:5])} (허용: {', '.join(allowed)})")
+
+    links = [("agents", "branch_id", "branches"), ("targets", "branch_id", "branches"),
+             ("contracts", "agent_id", "agents"), ("contracts", "product_id", "products")]
+    for name, c, ref in links:
+        unknown = sorted(set(raw[name][c].dropna()) - set(raw[ref][c]))
+        if unknown:
+            errors.append(f"{name}.csv: {ref}.csv에 없는 {c}가 있습니다: {', '.join(map(str, unknown[:5]))}")
+    return errors
+
+
+def prepare_data(raw: dict) -> dict:
+    """원본 표 5개에 지점·상품군·연월을 붙여 계산용 데이터로 만든다."""
+    branches = raw["branches"].copy()
+    agents = raw["agents"].copy()
+    products = raw["products"].copy()
+    targets = raw["targets"].copy()
+    contracts = raw["contracts"].copy()
+    targets["year_month"] = targets["year_month"].astype(str)
+
+    agents["appoint_date"] = pd.to_datetime(agents["appoint_date"])
+    contracts["contract_date"] = pd.to_datetime(contracts["contract_date"])
+    contracts["cancel_date"] = pd.to_datetime(contracts["cancel_date"])
+    contracts["year_month"] = contracts["contract_date"].dt.strftime("%Y-%m")
+    contracts = (
+        contracts.merge(agents[["agent_id", "agent_name", "branch_id"]], on="agent_id", how="left")
+        .merge(products[["product_id", "product_group"]], on="product_id", how="left")
+        .merge(branches[["branch_id", "branch_name"]], on="branch_id", how="left")
+    )
+    agents = agents.merge(branches[["branch_id", "branch_name"]], on="branch_id", how="left")
+    targets = targets.merge(branches[["branch_id", "branch_name"]], on="branch_id", how="left")
+
+    return {
+        "branches": branches,
+        "agents": agents,
+        "products": products,
+        "targets": targets,
+        "contracts": contracts,
+    }
+
+
+def load_data(data_dir: Path = DATA_DIR) -> dict:
+    """data/ 폴더의 CSV 5개를 읽어 계산용 데이터로 만든다."""
+    return prepare_data(read_tables(data_dir))
+
+
+def month_list(contracts: pd.DataFrame) -> list:
+    return sorted(contracts["year_month"].unique())
+
+
+def prev_month(ym: str) -> str:
+    return (pd.Period(ym, "M") - 1).strftime("%Y-%m")
+
+
+# ---------------------------------------------------------------- 필터
+def filter_contracts(contracts, branch_ids=None, groups=None):
+    df = contracts
+    if branch_ids is not None:
+        df = df[df["branch_id"].isin(branch_ids)]
+    if groups is not None:
+        df = df[df["product_group"].isin(groups)]
+    return df
+
+
+def filter_targets(targets, branch_ids=None):
+    if branch_ids is None:
+        return targets
+    return targets[targets["branch_id"].isin(branch_ids)]
+
+
+def active_agents(agents, ym: str, branch_ids=None):
+    """해당 월 재직 설계사: status=재직 이고 그 달 말일까지 위촉된 설계사."""
+    month_end = pd.Period(ym, "M").end_time
+    df = agents[(agents["status"] == "재직") & (agents["appoint_date"] <= month_end)]
+    if branch_ids is not None:
+        df = df[df["branch_id"].isin(branch_ids)]
+    return df
+
+
+# ---------------------------------------------------------------- 공통 계산
+def safe_rate(num, den):
+    """분모가 0이면 None (화면에서 '-')."""
+    if den is None or den == 0 or pd.isna(den):
+        return None
+    return num / den * 100
+
+
+def month_summary(data, ym, branch_ids=None, groups=None) -> dict:
+    """한 달의 건수·보험료·목표·가동률."""
+    c = filter_contracts(data["contracts"], branch_ids, groups)
+    cm = c[c["year_month"] == ym]
+    t = filter_targets(data["targets"], branch_ids)
+    tm = t[t["year_month"] == ym]
+
+    act = active_agents(data["agents"], ym, branch_ids)
+    working = cm[cm["agent_id"].isin(act["agent_id"])]["agent_id"].nunique()
+
+    count = len(cm)
+    premium = int(cm["monthly_premium"].sum())
+    target_count = int(tm["target_count"].sum()) if len(tm) else None
+    target_premium = int(tm["target_premium"].sum()) if len(tm) else None
+    return {
+        "count": count,
+        "premium": premium,
+        "target_count": target_count,
+        "target_premium": target_premium,
+        "count_rate": safe_rate(count, target_count),
+        "premium_rate": safe_rate(premium, target_premium),
+        "working_agents": working,
+        "active_agents": len(act),
+        "activity_rate": safe_rate(working, len(act)),
+    }
+
+
+def kpi_summary(data, ym, branch_ids=None, groups=None) -> dict:
+    """당월 KPI와 전월 대비 증감."""
+    cur = month_summary(data, ym, branch_ids, groups)
+    pm = prev_month(ym)
+    has_prev = pm in set(data["contracts"]["year_month"])
+    prev = month_summary(data, pm, branch_ids, groups) if has_prev else None
+    cur["prev"] = prev
+    cur["count_change"] = safe_rate(cur["count"] - prev["count"], prev["count"]) if prev else None
+    cur["premium_change"] = safe_rate(cur["premium"] - prev["premium"], prev["premium"]) if prev else None
+    if prev and cur["activity_rate"] is not None and prev["activity_rate"] is not None:
+        cur["activity_change"] = cur["activity_rate"] - prev["activity_rate"]
+    else:
+        cur["activity_change"] = None
+    return cur
+
+
+def monthly_trend(data, end_ym, months=24, branch_ids=None, groups=None) -> pd.DataFrame:
+    """기준 월까지 최근 N개월 월별 건수·보험료."""
+    all_months = [m for m in month_list(data["contracts"]) if m <= end_ym][-months:]
+    c = filter_contracts(data["contracts"], branch_ids, groups)
+    agg = c.groupby("year_month").agg(건수=("contract_id", "count"), 보험료=("monthly_premium", "sum"))
+    agg = agg.reindex(all_months, fill_value=0)
+    agg.index.name = "연월"
+    return agg.reset_index()
+
+
+def product_group_share(data, ym, branch_ids=None, groups=None) -> pd.DataFrame:
+    """당월 상품군별 건수·비중·전월 건수·보험료."""
+    c = filter_contracts(data["contracts"], branch_ids, groups)
+    order = [g for g in PRODUCT_GROUPS if groups is None or g in groups]
+    cur = c[c["year_month"] == ym].groupby("product_group")
+    prev = c[c["year_month"] == prev_month(ym)].groupby("product_group")["contract_id"].count()
+    df = pd.DataFrame({
+        "건수": cur["contract_id"].count(),
+        "보험료": cur["monthly_premium"].sum(),
+    }).reindex(order, fill_value=0)
+    df["전월 건수"] = prev.reindex(order, fill_value=0)
+    df["증감"] = df["건수"] - df["전월 건수"]
+    total = df["건수"].sum()
+    df["비중"] = df["건수"] / total * 100 if total else 0.0
+    df.index.name = "상품군"
+    return df.reset_index()
+
+
+def branch_performance(data, ym, branch_ids=None, groups=None) -> pd.DataFrame:
+    """당월 지점별 실적 vs 목표."""
+    c = filter_contracts(data["contracts"], branch_ids, groups)
+    cm = c[c["year_month"] == ym].groupby("branch_id").agg(
+        건수=("contract_id", "count"), 보험료=("monthly_premium", "sum"))
+    t = filter_targets(data["targets"], branch_ids)
+    tm = t[t["year_month"] == ym].set_index("branch_id")
+
+    b = data["branches"]
+    if branch_ids is not None:
+        b = b[b["branch_id"].isin(branch_ids)]
+    df = b.set_index("branch_id")[["branch_name", "region"]].join(cm).join(
+        tm[["target_count", "target_premium"]])
+    df[["건수", "보험료"]] = df[["건수", "보험료"]].fillna(0).astype(int)
+    df["건수 달성률"] = [safe_rate(a, t) for a, t in zip(df["건수"], df["target_count"])]
+    df["보험료 달성률"] = [safe_rate(a, t) for a, t in zip(df["보험료"], df["target_premium"])]
+    df = df.rename(columns={
+        "branch_name": "지점", "region": "권역",
+        "target_count": "목표 건수", "target_premium": "목표 보험료",
+    })
+    return df.reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- 위험점수 (rules.md 4장)
+RISK_RULES = [  # (컬럼, 점수, 사유) — 표시 순서도 이 순서
+    ("cond_drop", 30, "판매 급감"),
+    ("cond_retention", 25, "유지율 저하"),
+    ("cond_no_sales", 25, "연속 무실적"),
+    ("cond_concentration", 10, "상품 편중"),
+    ("cond_early_cancel", 10, "조기해지 다발"),
+]
+GRADES = ["고위험", "관찰", "정상"]
+
+
+def month_range(end_ym: str, n: int, offset: int = 0) -> list:
+    """end_ym에서 offset개월 앞을 끝으로 하는 n개월 목록 (오래된 순)."""
+    end = pd.Period(end_ym, "M") - offset
+    return [(end - i).strftime("%Y-%m") for i in range(n - 1, -1, -1)]
+
+
+def risk_grade(score: int) -> str:
+    if score >= 60:
+        return "고위험"
+    if score >= 30:
+        return "관찰"
+    return "정상"
+
+
+def risk_scores(data, ym: str = "2026-09", branch_ids=None) -> pd.DataFrame:
+    """재직 설계사별 위험점수·등급·사유 (점수 높은 순).
+
+    기간은 기준 월을 당월로 보고 계산한다 (2026-09이면 rules.md 1장과 같다).
+    유지율·조기해지율·편중도는 기준 월까지의 전체 기간 계약으로 계산한다.
+    """
+    month_end = pd.Period(ym, "M").end_time
+    agents = active_agents(data["agents"], ym, branch_ids).copy()
+    c = data["contracts"]
+    c = c[(c["contract_date"] <= month_end) & c["agent_id"].isin(agents["agent_id"])]
+
+    recent3, prev3, recent2 = month_range(ym, 3), month_range(ym, 3, 3), month_range(ym, 2)
+    by_agent = c.groupby("agent_id")
+    early = (c["status"].isin(["해지", "실효"])
+             & ((c["cancel_date"] - c["contract_date"]).dt.days <= 90))
+    group_counts = c.groupby(["agent_id", "product_group"]).size().unstack(fill_value=0)
+
+    s = pd.DataFrame(index=agents["agent_id"])
+    s["recent3"] = c[c["year_month"].isin(recent3)].groupby("agent_id").size()
+    s["prev3"] = c[c["year_month"].isin(prev3)].groupby("agent_id").size()
+    s["recent2"] = c[c["year_month"].isin(recent2)].groupby("agent_id").size()
+    s["total"] = by_agent.size()
+    s["kept"] = c[c["status"] == "유지"].groupby("agent_id").size()
+    s["early"] = c[early].groupby("agent_id").size()
+    s["top_group"] = group_counts.max(axis=1)
+    s = s.fillna(0).astype(int)
+
+    has = s["total"] > 0
+    s["유지율"] = (s["kept"] / s["total"] * 100).where(has)
+    s["조기해지율"] = (s["early"] / s["total"] * 100).where(has)
+    s["편중도"] = (s["top_group"] / s["total"] * 100).where(has)
+
+    # 위촉 후 3개월 미만이면 "감소" 조건 제외
+    appoint = agents.set_index("agent_id")["appoint_date"]
+    is_new = appoint > (month_end - pd.DateOffset(months=3))
+
+    s["cond_drop"] = (s["prev3"] >= 1) & (s["recent3"] <= s["prev3"] * 0.7) & ~is_new
+    s["cond_retention"] = s["유지율"] < 80
+    s["cond_no_sales"] = s["recent2"] == 0
+    s["cond_concentration"] = s["편중도"] >= 70
+    s["cond_early_cancel"] = s["조기해지율"] >= 10
+
+    s["점수"] = sum(s[col] * pts for col, pts, _ in RISK_RULES)
+    s["등급"] = s["점수"].map(risk_grade)
+    s["해당 사유"] = [
+        ", ".join(reason for col, _, reason in RISK_RULES if row[col])
+        for _, row in s.iterrows()
+    ]
+
+    info = agents.set_index("agent_id")[["agent_name", "branch_name"]]
+    s = info.join(s).rename(columns={"agent_name": "설계사", "branch_name": "지점"})
+    s["직전3M→최근3M"] = s["prev3"].astype(str) + " → " + s["recent3"].astype(str) + "건"
+    s = s.reset_index().sort_values(["점수", "agent_id"], ascending=[False, True])
+    return s.reset_index(drop=True)
+
+
+def agent_monthly_counts(data, agent_id: str, ym: str, months: int = 12) -> pd.DataFrame:
+    """설계사의 최근 N개월 월별 판매 건수."""
+    ms = month_range(ym, months)
+    c = data["contracts"]
+    cnt = c[c["agent_id"] == agent_id].groupby("year_month").size().reindex(ms, fill_value=0)
+    return pd.DataFrame({"연월": ms, "건수": cnt.values})
+
+
+def agent_group_mix(data, agent_id: str, ym: str) -> pd.DataFrame:
+    """설계사 본인 상품군 비중 vs 전사 평균 비중 (기준 월까지 전체 기간)."""
+    c = data["contracts"]
+    c = c[c["contract_date"] <= pd.Period(ym, "M").end_time]
+    share = lambda df: (df["product_group"].value_counts(normalize=True) * 100).reindex(
+        PRODUCT_GROUPS, fill_value=0.0)
+    return pd.DataFrame({
+        "상품군": PRODUCT_GROUPS,
+        "본인": share(c[c["agent_id"] == agent_id]).values,
+        "전사 평균": share(c).values,
+    })
+
+
+def agent_profile(data, agent_id: str, ym: str) -> dict:
+    """설계사 한 명의 기본 정보, 당월·전월 실적, 위험 조건 (④ 설계사 조회 화면용)."""
+    a = data["agents"].set_index("agent_id").loc[agent_id]
+    c = data["contracts"]
+    mine = c[(c["agent_id"] == agent_id) & (c["contract_date"] <= pd.Period(ym, "M").end_time)]
+    now, prev = mine[mine["year_month"] == ym], mine[mine["year_month"] == prev_month(ym)]
+    risk = risk_scores(data, ym)
+    row = risk[risk["agent_id"] == agent_id]
+    return {
+        "name": a["agent_name"], "branch": a["branch_name"], "status": a["status"],
+        "appoint_date": a["appoint_date"].strftime("%Y-%m-%d"), "db_source": a["db_source"],
+        "count": len(now), "count_change": safe_rate(len(now) - len(prev), len(prev)),
+        "premium": int(now["monthly_premium"].sum()),
+        "premium_change": safe_rate(now["monthly_premium"].sum() - prev["monthly_premium"].sum(),
+                                    prev["monthly_premium"].sum()),
+        "total": len(mine),
+        "retention": safe_rate((mine["status"] == "유지").sum(), len(mine)),
+        "risk": None if row.empty else row.iloc[0],  # 해당 월 재직이 아니면 위험점수 대상이 아니다
+        "recent": mine.sort_values(["contract_date", "contract_id"], ascending=False).head(10),
+    }
+
+
+def risk_checklist(r) -> pd.DataFrame:
+    """위험점수 조건별 해당 여부와 근거 값 (rules.md 2장)."""
+    f = lambda v: "-" if pd.isna(v) else f"{v:.1f}%"
+    rows = [
+        ("판매 급감", 30, r["cond_drop"], f"직전 3개월 {r['prev3']}건 → 최근 3개월 {r['recent3']}건", "직전 대비 70% 이하"),
+        ("유지율 저하", 25, r["cond_retention"], f"유지율 {f(r['유지율'])}", "80% 미만"),
+        ("연속 무실적", 25, r["cond_no_sales"], f"최근 2개월 {r['recent2']}건", "0건"),
+        ("상품 편중", 10, r["cond_concentration"], f"편중도 {f(r['편중도'])}", "70% 이상"),
+        ("조기해지 다발", 10, r["cond_early_cancel"], f"조기해지율 {f(r['조기해지율'])}", "10% 이상"),
+    ]
+    return pd.DataFrame([{"조건": n, "해당": "해당" if hit else "-", "현재 값": v, "기준": b,
+                          "점수": f"{p if hit else 0} / {p}"} for n, p, hit, v, b in rows])
+
+
+# ---------------------------------------------------------------- 예측 (rules.md 5장)
+FORECAST_GAP_RATE = 80.0
+SEASONAL_BASE_YEAR = "2025"
+
+
+def seasonal_index(data, target_ym: str):
+    """계절지수 = 전년 같은 달 전사 건수 ÷ 2025년 1~12월 전사 월평균 건수.
+
+    전년 같은 달 데이터가 없으면 None.
+    """
+    monthly = data["contracts"].groupby("year_month").size()
+    base = monthly[monthly.index.str.startswith(SEASONAL_BASE_YEAR)].mean()
+    year_ago = (pd.Period(target_ym, "M") - 12).strftime("%Y-%m")
+    if year_ago not in monthly.index:
+        return None
+    return monthly[year_ago] / base
+
+
+def next_quarter_forecast(data, ym: str = "2026-09", branch_ids=None):
+    """기준 월 다음 3개월의 지점별 예측 건수와 목표 대비 판정.
+
+    반환: (지점별 표, 계절지수 표). 계절지수를 구할 수 없으면 (None, 계절지수 표).
+    """
+    future = [(pd.Period(ym, "M") + i).strftime("%Y-%m") for i in (1, 2, 3)]
+    seasonal = pd.DataFrame({"월": future, "계절지수": [seasonal_index(data, f) for f in future]})
+    if seasonal["계절지수"].isna().any():
+        return None, seasonal
+
+    recent3 = month_range(ym, 3)
+    c = data["contracts"]
+    recent_avg = c[c["year_month"].isin(recent3)].groupby("branch_id").size() / 3
+    t = data["targets"]
+    target_avg = t[t["year_month"].isin(recent3)].groupby("branch_id")["target_count"].mean()
+
+    b = data["branches"]
+    if branch_ids is not None:
+        b = b[b["branch_id"].isin(branch_ids)]
+    df = b.set_index("branch_id")[["branch_name"]].rename(columns={"branch_name": "지점"})
+    df["최근 3개월 평균"] = recent_avg.reindex(df.index, fill_value=0)
+    for f, idx in zip(seasonal["월"], seasonal["계절지수"]):
+        df[f"{f} 예측"] = df["최근 3개월 평균"] * idx
+    df["예측"] = df[[f"{f} 예측" for f in future]].sum(axis=1)
+    df["목표(가정)"] = target_avg.reindex(df.index) * 3
+    df["예측 달성률"] = [safe_rate(p, t) for p, t in zip(df["예측"], df["목표(가정)"])]
+    df["판정"] = ["⚠ 괴리 예상" if r is not None and r < FORECAST_GAP_RATE else "정상"
+                for r in df["예측 달성률"]]
+    return df.reset_index(drop=True), seasonal
+
+====================================================================================================
+### report.py (전체, 200줄, sha256 7a521f57edcfadac)
+====================================================================================================
+"""월간 보고서 마크다운 생성 (docs/report_template.md 구성·문구 스타일). 계산은 metrics.py를 쓴다."""
+import pandas as pd
+
+import metrics as m
+
+LOW_RATE = 90.0
+
+
+def _pct(v):
+    return "-" if v is None or pd.isna(v) else f"{v:.1f}%"
+
+
+def _signed_pct(v):
+    return "-" if v is None else f"{v:+.1f}%"
+
+
+def _won(v):
+    return "-" if v is None or pd.isna(v) else f"{v:,.0f}"
+
+
+def _mark(rate):
+    """달성률 90% 미만이면 ▼ 표시."""
+    return ("▼ " if rate is not None and not pd.isna(rate) and rate < LOW_RATE else "") + _pct(rate)
+
+
+def _quarter_label(months: list) -> tuple:
+    """(제목용 라벨, 문장용 짧은 라벨). 분기 시작 월이 아니면 기간으로 표시."""
+    p = pd.Period(months[0], "M")
+    if p.month in (1, 4, 7, 10):
+        return f"{p.year}년 {p.quarter}분기", f"{p.quarter}분기"
+    return f"{months[0]} ~ {months[-1]}", "다음 분기"
+
+
+def _short_id(agent_id: str) -> str:
+    return agent_id.lstrip("A")
+
+
+def _risk_table(rows: pd.DataFrame) -> list:
+    lines = ["| 설계사 | 지점 | 점수 | 해당 사유 |", "|---|---|---:|---|"]
+    if rows.empty:
+        lines.append("| 해당 없음 | | | |")
+    for _, r in rows.iterrows():
+        lines.append(f"| {r['설계사']} | {r['지점']} | {r['점수']} | {r['해당 사유']} |")
+    return lines
+
+
+def _summary_sentences(k, share, bp, high) -> list:
+    # 1. 전월 대비 실적 변화와 주된 원인 상품군
+    if k["count_change"] is None:
+        s1 = f"신계약 건수는 {k['count']}건이다."
+    else:
+        up = k["count_change"] >= 0
+        movers = share[share["증감"] > 0] if up else share[share["증감"] < 0]
+        movers = movers.sort_values("증감", ascending=not up).head(2)
+        verb = "증가" if up else "감소"
+        s1 = f"신계약 건수는 전월 대비 {abs(k['count_change']):.1f}% {verb}했으며"
+        if movers.empty:
+            s1 += "."
+        else:
+            names = "과 ".join(f"{g}({d:+d}건)" for g, d in zip(movers["상품군"], movers["증감"]))
+            s1 += f", {names}이 {verb}를 이끌었다."
+
+    # 2. 목표 미달 지점 (건수 달성률 90% 미만)
+    low = bp[[r is not None and r < LOW_RATE for r in bp["건수 달성률"]]]
+    if low.empty:
+        s2 = f"모든 지점이 건수 달성률 {LOW_RATE:.0f}% 이상으로 목표 수준을 유지했다."
+    else:
+        parts = [f"{r['지점']}은 건수 달성률 {_pct(r['건수 달성률'])}, 보험료 달성률 {_pct(r['보험료 달성률'])}"
+                 for _, r in low.iterrows()]
+        s2 = ", ".join(parts) + "로 목표에 크게 못 미쳤다."
+
+    # 3. 고위험 설계사 수와 조치 필요 사항
+    if high.empty:
+        s3 = "고위험 설계사는 없다."
+    else:
+        no_sales = int(high["cond_no_sales"].sum())
+        s3 = f"고위험 설계사는 {len(high)}명이며, "
+        if no_sales:
+            who = f"{no_sales}명 모두" if no_sales == len(high) else f"이 중 {no_sales}명은"
+            s3 += f"{who} 최근 2개월 동안 신계약이 없어 즉시 면담이 필요하다."
+        else:
+            s3 += "코칭·교육 배정이 필요하다."
+    return [s1, s2, s3]
+
+
+def _action_items(ym, high, watch, fc, q_short) -> list:
+    next_month = (pd.Period(ym, "M") + 1).month
+    items = []
+    if high.empty:
+        items.append("고위험 설계사는 없으므로 관찰 대상 설계사를 지점장이 월 단위로 점검한다.")
+    else:
+        items.append(f"고위험 설계사 {len(high)}명은 {next_month}월 둘째 주까지 지점장 면담과 코칭 교육을 배정한다.")
+
+    gap = fc[fc["판정"] != "정상"] if fc is not None else pd.DataFrame()
+    if gap.empty:
+        items.append(f"{q_short} 괴리 예상 지점은 없으므로 현재 활동 수준을 유지한다.")
+    watch_counts = watch.groupby("지점").size()
+    max_watch = watch_counts.max() if len(watch_counts) else 0
+    for _, g in gap.iterrows():
+        mine = watch[watch["지점"] == g["지점"]]
+        if mine.empty:
+            items.append(f"{g['지점']}은 {q_short} 괴리가 예상되므로 지점 단위 활동 점검이 필요하다.")
+            continue
+        ids = "·".join(_short_id(a) for a in sorted(mine["agent_id"]))
+        most = "으로 가장 많고" if len(mine) == max_watch else "이고"
+        items.append(f"{g['지점']}은 관찰 대상 설계사가 {len(mine)}명({ids}){most} "
+                     f"{q_short} 괴리가 예상되므로 지점 단위 활동 점검이 필요하다.")
+    return items
+
+
+def build_report(data, ym: str) -> str:
+    """선택한 월의 전 지점 보고서 마크다운."""
+    p = pd.Period(ym, "M")
+    k = m.kpi_summary(data, ym)
+    prev = k["prev"]
+    share = m.product_group_share(data, ym)
+    bp = m.branch_performance(data, ym)
+    risk = m.risk_scores(data, ym)
+    high = risk[risk["등급"] == "고위험"]
+    watch = risk[risk["등급"] == "관찰"]
+    fc, seasonal = m.next_quarter_forecast(data, ym)
+    q_label, q_short = _quarter_label(list(seasonal["월"]))
+
+    L = [
+        f"# {p.year}년 {p.month}월 영업성과 보고서",
+        "",
+        f"- 작성기준일: {p.end_time.strftime('%Y-%m-%d')}",
+        f"- 대상: 전 지점 ({len(data['branches'])}개), 재직 설계사 {k['active_agents']}명",
+        "- 작성: 하이브리드사업부 (자동 생성)",
+        "",
+        "## 1. 요약",
+        "",
+        "| 구분 | 당월 | 전월 | 증감 | 목표 | 달성률 |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    if prev:
+        # 가동률 증감은 표시값(소수 1자리) 기준 차이
+        act_change = round(k["activity_rate"], 1) - round(prev["activity_rate"], 1)
+        L += [
+            f"| 신계약 건수 | {k['count']:,}건 | {prev['count']:,}건 | {_signed_pct(k['count_change'])} "
+            f"| {k['target_count']:,}건 | {_pct(k['count_rate'])} |",
+            f"| 신계약 보험료(월납) | {k['premium']:,}원 | {prev['premium']:,}원 | {_signed_pct(k['premium_change'])} "
+            f"| {k['target_premium']:,}원 | {_pct(k['premium_rate'])} |",
+            f"| 가동률 | {_pct(k['activity_rate'])} | {_pct(prev['activity_rate'])} | {act_change:+.1f}%p | - | - |",
+        ]
+    else:
+        L += [
+            f"| 신계약 건수 | {k['count']:,}건 | - | - | {k['target_count']:,}건 | {_pct(k['count_rate'])} |",
+            f"| 신계약 보험료(월납) | {k['premium']:,}원 | - | - | {k['target_premium']:,}원 | {_pct(k['premium_rate'])} |",
+            f"| 가동률 | {_pct(k['activity_rate'])} | - | - | - | - |",
+        ]
+    L += ["", "**주요 내용**"]
+    L += [f"- {s}" for s in _summary_sentences(k, share, bp, high)]
+
+    # 2. 지점별 실적
+    L += [
+        "", "## 2. 지점별 실적", "",
+        "| 지점 | 권역 | 건수 | 목표 | 달성률 | 보험료(원) | 목표(원) | 달성률 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for _, r in bp.iterrows():
+        L.append(f"| {r['지점']} | {r['권역']} | {r['건수']} | {r['목표 건수']:.0f} | {_mark(r['건수 달성률'])} "
+                 f"| {_won(r['보험료'])} | {_won(r['목표 보험료'])} | {_mark(r['보험료 달성률'])} |")
+    L.append(f"| **합계** | | **{k['count']}** | **{k['target_count']}** | **{_pct(k['count_rate'])}** "
+             f"| **{_won(k['premium'])}** | **{_won(k['target_premium'])}** | **{_pct(k['premium_rate'])}** |")
+    L += ["", f"※ 달성률 {LOW_RATE:.0f}% 미만 지점은 ▼ 표시"]
+
+    # 3. 상품군별 실적
+    L += [
+        "", "## 3. 상품군별 실적", "",
+        "| 상품군 | 건수 | 비중 | 전월 건수 | 증감 | 보험료(원) |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for _, r in share.iterrows():
+        L.append(f"| {r['상품군']} | {r['건수']} | {_pct(r['비중'])} | {r['전월 건수']} | {r['증감']:+d} "
+                 f"| {_won(r['보험료'])} |")
+    L.append(f"| **합계** | **{share['건수'].sum()}** | **100.0%** | **{share['전월 건수'].sum()}** "
+             f"| **{share['증감'].sum():+d}** | **{_won(share['보험료'].sum())}** |")
+
+    # 4. 위험 설계사 현황
+    L += ["", "## 4. 위험 설계사 현황", "", "**고위험 (60점 이상) — 코칭·교육 대상**", ""]
+    L += _risk_table(high)
+    L += ["", "**관찰 (30~59점) — 지점장 모니터링**", ""]
+    L += _risk_table(watch)
+
+    # 5. 다음 분기 예측
+    L += ["", f"## 5. 다음 분기({q_label}) 실적 예측", ""]
+    if fc is None:
+        L.append("전년 같은 달 실적이 없어 계절지수를 구할 수 없으므로 예측을 생략한다.")
+    else:
+        L += ["| 지점 | 예측 건수 | 목표(가정) | 예측 달성률 | 판정 |", "|---|---:|---:|---:|---|"]
+        for _, r in fc.iterrows():
+            L.append(f"| {r['지점']} | {r['예측']:.1f} | {r['목표(가정)']:.0f} | {_pct(r['예측 달성률'])} | {r['판정']} |")
+        idx = ", ".join(f"{pd.Period(mo, 'M').month}월 {v:.3f}" for mo, v in zip(seasonal["월"], seasonal["계절지수"]))
+        L += ["", f"※ 계절지수: {idx} ({m.SEASONAL_BASE_YEAR}년 실적 기준)"]
+
+    # 6. 조치 제안
+    L += ["", "## 6. 조치 제안"]
+    L += [f"- {s}" for s in _action_items(ym, high, watch, fc, q_short)]
+    return "\n".join(L) + "\n"
+
+====================================================================================================
+### export.py (전체, 178줄, sha256 589e3027745a807d)
+====================================================================================================
+"""월간 보고서 마크다운(report.py 결과)을 PDF·워드 파일로 바꾼다.
+
+report.py가 만드는 마크다운만 다룬다: # 제목, ## 소제목, - 목록, | 표 |, **굵게**, ※ 주석.
+"""
+import io
+import re
+from pathlib import Path
+
+FONT_DIR = Path(__file__).parent / "fonts"
+BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def parse(md: str) -> list:
+    """마크다운을 (종류, 내용) 블록 목록으로 나눈다."""
+    blocks, table = [], None
+    for line in md.splitlines() + [""]:
+        s = line.strip()
+        if s.startswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if table is None:
+                table = {"rows": [], "align": None}
+            if all(re.fullmatch(r":?-+:?", c) for c in cells):
+                table["align"] = ["right" if c.endswith(":") else "left" for c in cells]
+            else:
+                table["rows"].append(cells)
+            continue
+        if table is not None:
+            blocks.append(("table", table))
+            table = None
+        if not s:
+            continue
+        if s.startswith("## "):
+            blocks.append(("h2", s[3:]))
+        elif s.startswith("# "):
+            blocks.append(("h1", s[2:]))
+        elif s.startswith("- "):
+            blocks.append(("bullet", s[2:]))
+        elif s.startswith("※"):
+            blocks.append(("note", s))
+        else:
+            blocks.append(("para", s))
+    return blocks
+
+
+# ---------------------------------------------------------------- PDF (reportlab, 나눔고딕 내장)
+def report_pdf(md: str) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_RIGHT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.lib.fonts import addMapping
+
+    if "Nanum" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("Nanum", str(FONT_DIR / "NanumGothic.ttf")))
+        pdfmetrics.registerFont(TTFont("Nanum-Bold", str(FONT_DIR / "NanumGothicBold.ttf")))
+        addMapping("Nanum", 0, 0, "Nanum")
+        addMapping("Nanum", 1, 0, "Nanum-Bold")
+        addMapping("Nanum", 0, 1, "Nanum")
+        addMapping("Nanum", 1, 1, "Nanum-Bold")
+
+    ink, muted, line, head_bg = (colors.HexColor(c) for c in ("#15232d", "#5b6b78", "#d5dde3", "#eef3f5"))
+    base = ParagraphStyle("base", fontName="Nanum", fontSize=9.5, leading=14, textColor=ink, wordWrap="CJK")
+    st = {
+        "h1": ParagraphStyle("h1", base, fontName="Nanum-Bold", fontSize=17, leading=24, spaceAfter=8),
+        "h2": ParagraphStyle("h2", base, fontName="Nanum-Bold", fontSize=12.5, leading=18, spaceBefore=12, spaceAfter=6,
+                             textColor=colors.HexColor("#157f8d")),
+        "para": ParagraphStyle("para", base, spaceBefore=6, spaceAfter=3),
+        "bullet": ParagraphStyle("bullet", base, leftIndent=10, bulletIndent=0, spaceAfter=2),
+        "note": ParagraphStyle("note", base, fontSize=8.5, textColor=muted, spaceBefore=4),
+        "cell": ParagraphStyle("cell", base, fontSize=8.5, leading=11.5),
+    }
+    st["cell_r"] = ParagraphStyle("cell_r", st["cell"], alignment=TA_RIGHT)
+
+    def rich(text):
+        text = text.replace("⚠ ", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return BOLD.sub(r"<b>\1</b>", text)
+
+    story = []
+    width = A4[0] - 36 * mm
+    for kind, body in parse(md):
+        if kind == "table":
+            rows, align = body["rows"], body["align"] or ["left"] * len(body["rows"][0])
+            data = [[Paragraph(f'<font color="#d03a3a">{rich(c)}</font>' if "▼" in c or "⚠" in c else rich(c), st["cell_r"] if a == "right" and i else st["cell"])
+                     for c, a in zip(r, align)] for i, r in enumerate(rows)]
+            t = Table(data, repeatRows=1, colWidths=_col_widths(rows, width))
+            style = [("GRID", (0, 0), (-1, -1), 0.5, line), ("BACKGROUND", (0, 0), (-1, 0), head_bg),
+                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 3),
+                     ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]
+            t.setStyle(TableStyle(style))
+            story += [t, Spacer(1, 4)]
+        elif kind == "bullet":
+            story.append(Paragraph(rich(body), st["bullet"], bulletText="•"))
+        else:
+            story.append(Paragraph(rich(body), st[kind]))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm,
+                            bottomMargin=16 * mm, title=parse(md)[0][1], author="영업 성과 분석 대시보드 (PoC)")
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _col_widths(rows, total):
+    """열 내용 길이에 비례한 폭 (너무 좁거나 넓지 않게)."""
+    def w(text):  # 한글은 영문·숫자의 약 2배 폭
+        return sum(2 if ord(ch) > 0x2E7F else 1 for ch in BOLD.sub(r"\1", text))
+    lens = [max(w(r[i]) for r in rows) for i in range(len(rows[0]))]
+    lens = [min(max(n, 6), 50) + 2 for n in lens]
+    return [total * n / sum(lens) for n in lens]
+
+
+# ---------------------------------------------------------------- 워드 (python-docx)
+def report_docx(md: str) -> bytes:
+    from docx import Document
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Cm, Pt, RGBColor
+
+    doc = Document()
+    for sec in doc.sections:
+        sec.left_margin = sec.right_margin = Cm(2)
+    for name in ("Normal", "Title", "Heading 1", "Heading 2", "List Bullet"):
+        s = doc.styles[name]
+        s.font.name = "맑은 고딕"
+        s.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "맑은 고딕")
+    doc.styles["Normal"].font.size = Pt(10)
+    doc.styles["Heading 2"].font.color.rgb = RGBColor(0x15, 0x7F, 0x8D)
+
+    def add_runs(p, text, size=None, color=None):
+        for i, part in enumerate(BOLD.split(text)):  # 홀수 번째 조각이 **굵게**
+            if part:
+                r = p.add_run(part)
+                r.bold = i % 2 == 1 or None
+                if size:
+                    r.font.size = Pt(size)
+                if color:
+                    r.font.color.rgb = color
+
+    for kind, body in parse(md):
+        if kind == "h1":
+            p = doc.add_heading(level=1)
+            add_runs(p, body, 16)
+        elif kind == "h2":
+            p = doc.add_heading(level=2)
+            add_runs(p, body)
+        elif kind == "bullet":
+            add_runs(doc.add_paragraph(style="List Bullet"), body)
+        elif kind == "note":
+            add_runs(doc.add_paragraph(), body, 9, RGBColor(0x5B, 0x6B, 0x78))
+        elif kind == "para":
+            add_runs(doc.add_paragraph(), body)
+        else:
+            rows, align = body["rows"], body["align"] or ["left"] * len(body["rows"][0])
+            t = doc.add_table(rows=len(rows), cols=len(rows[0]))
+            t.style = "Table Grid"
+            t.alignment = WD_TABLE_ALIGNMENT.CENTER
+            t.autofit = False
+            widths = _col_widths(rows, Cm(17).emu)
+            for j, col in enumerate(t.columns):
+                col.width = int(widths[j])
+            for i, r in enumerate(rows):
+                for j, (c, a) in enumerate(zip(r, align)):
+                    t.cell(i, j).width = int(widths[j])
+                    p = t.cell(i, j).paragraphs[0]
+                    add_runs(p, f"**{c}**" if i == 0 and c else c, 9,
+                             RGBColor(0xD0, 0x3A, 0x3A) if "▼" in c or "⚠" in c else None)
+                    if a == "right" and i:
+                        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            doc.add_paragraph()
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+====================================================================================================
+### make_report.py (전체, 41줄, sha256 5b91903eeed3147e)
+====================================================================================================
+"""월간 보고서 파일(.md, .pdf, .docx)을 만든다. 매월 자동 보고에서 쓴다.
+
+실행: python make_report.py [YYYY-MM] [--out 폴더]
+월을 빼면 지난달 보고서를 만들고, 데이터에 지난달이 없으면 데이터의 마지막 월로 만든다.
+"""
+import argparse
+from datetime import date
+from pathlib import Path
+
+import export as ex
+import metrics as m
+import report as rp
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("month", nargs="?", help="보고 월 (예: 2026-09)")
+    ap.add_argument("--out", default="reports", help="저장 폴더 (기본: reports)")
+    args = ap.parse_args()
+
+    data = m.load_data()
+    months = m.month_list(data["contracts"])
+    wanted = args.month or m.prev_month(date.today().strftime("%Y-%m"))
+    ym = wanted if wanted in months else months[-1]
+    if ym != wanted:
+        print(f"안내: 데이터에 {wanted}이(가) 없어 마지막 월 {ym}로 작성합니다.")
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    md = rp.build_report(data, ym)
+    base = out / f"영업성과보고서_{ym}"
+    base.with_suffix(".md").write_text(md, encoding="utf-8")
+    base.with_suffix(".pdf").write_bytes(ex.report_pdf(md))
+    base.with_suffix(".docx").write_bytes(ex.report_docx(md))
+    print(f"보고 월 {ym}")
+    for ext in (".md", ".pdf", ".docx"):
+        print(base.with_suffix(ext))
+
+
+if __name__ == "__main__":
+    main()
+
+====================================================================================================
+### web/build_web.py (전체, 158줄, sha256 ee6065ba1ff8aab6)
+====================================================================================================
+"""웹 공유용 정적 페이지 생성: 앱과 같은 계산(metrics.py, report.py) 결과를 HTML에 넣는다.
+
+실행: python web/build_web.py  →  web/dashboard.html
+필요 패키지: pandas, markdown
+"""
+import json
+import re
+import sys
+from itertools import product
+from pathlib import Path
+
+import base64
+
+import markdown
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+import metrics as m  # noqa: E402
+import export as ex  # noqa: E402
+import report as rp  # noqa: E402
+
+LOW_RATE = 90.0
+
+
+def pct(v):
+    return "-" if v is None or pd.isna(v) else f"{v:.1f}%"
+
+
+def signed(v):
+    return "-" if v is None else f"{v:+.1f}%"
+
+
+def num(v):
+    return None if v is None or pd.isna(v) else float(v)
+
+
+def build():
+    data = m.load_data()
+    months = m.month_list(data["contracts"])
+    branches = data["branches"]
+    bkeys = ["ALL"] + branches["branch_id"].tolist()
+    masks = ["".join(bits) for bits in product("10", repeat=4) if "1" in bits]
+
+    def b_ids(b):
+        return None if b == "ALL" else [b]
+
+    def g_filter(mask):
+        gs = [g for g, bit in zip(m.PRODUCT_GROUPS, mask) if bit == "1"]
+        return None if len(gs) == 4 else gs
+
+    # ① 성과 대시보드
+    trend, perf = {}, {}
+    for b, mask in product(bkeys, masks):
+        t = m.monthly_trend(data, months[-1], 24, b_ids(b), g_filter(mask))
+        trend[f"{b}|{mask}"] = {"count": t["건수"].astype(int).tolist(), "premium": t["보험료"].astype(int).tolist()}
+        for ym in months:
+            k = m.kpi_summary(data, ym, b_ids(b), g_filter(mask))
+            share = m.product_group_share(data, ym, b_ids(b), g_filter(mask))
+            bp = m.branch_performance(data, ym, b_ids(b), g_filter(mask))
+            perf[f"{ym}|{b}|{mask}"] = {
+                "kpi": [
+                    f"{k['count']:,}건", f"전월 대비 {signed(k['count_change'])}",
+                    f"{k['premium']:,}원", f"전월 대비 {signed(k['premium_change'])}",
+                    pct(k["count_rate"]), "목표 -" if k["target_count"] is None else f"목표 {k['target_count']:,}건",
+                    pct(k["activity_rate"]), f"{k['working_agents']} / {k['active_agents']}명",
+                ],
+                "share": [[r["상품군"], round(float(r["비중"]), 4), pct(r["비중"]), int(r["건수"]), int(r["보험료"])]
+                          for _, r in share.iterrows()],
+                "branch": [[r["지점"], int(r["건수"]), num(r["목표 건수"]), pct(r["건수 달성률"]),
+                            r["건수 달성률"] is not None and r["건수 달성률"] < LOW_RATE]
+                           for _, r in bp.iterrows()],
+            }
+
+    # ② 위험 설계사 (전 지점으로 계산, 화면에서 지점으로 거른다)
+    risk = {}
+    bid = data["agents"].set_index("agent_id")["branch_id"]
+    for ym in months:
+        r = m.risk_scores(data, ym)
+        rows = []
+        for _, a in r.iterrows():
+            rows.append([a["agent_id"], a["설계사"], bid[a["agent_id"]], a["지점"], int(a["점수"]), a["등급"],
+                         a["해당 사유"], a["직전3M→최근3M"], pct(a["유지율"])])
+        risk[ym] = rows
+
+    # 설계사별 월·상품군 건수 (상세 차트와 전사 평균 비교용)
+    c = data["contracts"]
+    cnt = c.groupby(["agent_id", "year_month", "product_group"]).size()
+    agent_mg = {}
+    for aid in data["agents"]["agent_id"]:
+        agent_mg[aid] = [[int(cnt.get((aid, ym, g), 0)) for g in m.PRODUCT_GROUPS] for ym in months]
+
+    # 설계사 조회: 월별 건수·보험료·유지 건수(누적 유지율 계산용), 위험 조건, 계약 목록
+    ag = data["agents"].sort_values("agent_id")
+    agents = [[r.agent_id, r.agent_name, r.branch_id, r.branch_name, r.status,
+               r.appoint_date.strftime("%Y-%m-%d"), r.db_source] for r in ag.itertuples()]
+    by = c.assign(kept=(c["status"] == "유지").astype(int)).groupby(["agent_id", "year_month"]).agg(
+        n=("contract_id", "size"), prem=("monthly_premium", "sum"), kept=("kept", "sum"))
+    agent_month = {aid: [[int(by.loc[(aid, ym)].n), int(by.loc[(aid, ym)].prem), int(by.loc[(aid, ym)].kept)]
+                         if (aid, ym) in by.index else [0, 0, 0] for ym in months] for aid in ag["agent_id"]}
+    risk_chk = {}
+    for ym in months:
+        r = m.risk_scores(data, ym)
+        risk_chk[ym] = {a["agent_id"]: [[x["해당"] == "해당", x["현재 값"]] for _, x in m.risk_checklist(a).iterrows()]
+                        for _, a in r.iterrows()}
+    names = data["products"].set_index("product_id")["product_name"]
+    agent_contracts = {aid: [] for aid in ag["agent_id"]}
+    for r in c.sort_values(["contract_date", "contract_id"], ascending=False).itertuples():
+        agent_contracts[r.agent_id].append([r.contract_date.strftime("%Y-%m-%d"), names[r.product_id], r.product_group,
+                                            int(r.monthly_premium), r.status, int(r.is_replacement)])
+    sample = m.risk_checklist(m.risk_scores(data, months[-1]).iloc[0])  # 조건 이름·기준·배점은 metrics.py에서 가져온다
+    chk_rule = [[x["조건"], x["기준"], int(x["점수"].split(" / ")[1])] for _, x in sample.iterrows()]
+
+    # ③ 실적 예측
+    forecast = {}
+    for ym in months:
+        fc, seasonal = m.next_quarter_forecast(data, ym)
+        if fc is None:
+            forecast[ym] = None
+            continue
+        bid = dict(zip(branches["branch_name"], branches["branch_id"]))
+        future = list(seasonal["월"])
+        forecast[ym] = {
+            "months": future,
+            "seasonal": [f"{v:.3f}" for v in seasonal["계절지수"]],
+            "rows": [[bid[r["지점"]], r["지점"], round(float(r["예측"]), 4), f"{r['예측']:.1f}", float(r["목표(가정)"]),
+                      f"{r['목표(가정)']:,.0f}", pct(r["예측 달성률"]), r["판정"], f"{r['최근 3개월 평균']:.1f}",
+                      [f"{r[f'{f} 예측']:.1f}" for f in future]] for _, r in fc.iterrows()],
+        }
+
+    # ④ 월간 보고서
+    reports = {}
+    for ym in months:
+        md = rp.build_report(data, ym)
+        # 굵은 소제목 바로 아래 목록도 목록으로 렌더링되도록 빈 줄을 넣는다 (미리보기용)
+        md_view = re.sub(r"(\*\*[^\n]*\*\*)\n(- )", r"\1\n\n\2", md)
+        reports[ym] = {"md": md, "html": markdown.markdown(md_view, extensions=["tables"]),
+                       "pdf": base64.b64encode(ex.report_pdf(md)).decode(),
+                       "docx": base64.b64encode(ex.report_docx(md)).decode()}
+
+    payload = {
+        "months": months,
+        "branches": [[r.branch_id, r.branch_name] for r in branches.itertuples()],
+        "groups": m.PRODUCT_GROUPS,
+        "trend": trend, "perf": perf, "risk": risk, "agentMG": agent_mg,
+        "forecast": forecast, "reports": reports,
+        "agents": agents, "agentMonth": agent_month, "riskChk": risk_chk, "chkRule": chk_rule,
+        "agentContracts": agent_contracts,
+        "gapRate": m.FORECAST_GAP_RATE,
+    }
+    tpl = (ROOT / "web" / "template.html").read_text(encoding="utf-8")
+    out = tpl.replace("/*__DATA__*/null", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    (ROOT / "web" / "dashboard.html").write_text(out, encoding="utf-8")
+    print(f"web/dashboard.html {len(out.encode()) / 1e6:.2f} MB")
+
+
+if __name__ == "__main__":
+    build()
+
+====================================================================================================
+### app.py → fmt_won (67~68줄, 원본 그대로)
+====================================================================================================
+def fmt_won(v):
+    return "-" if v is None else f"{v:,.0f}원"
+
+====================================================================================================
+### app.py → fmt_pct (71~72줄, 원본 그대로)
+====================================================================================================
+def fmt_pct(v):
+    return "-" if v is None else f"{v:.1f}%"
+
+====================================================================================================
+### app.py → get_data (106~123줄, 원본 그대로)
+====================================================================================================
+@st.cache_data
+def get_data(uploads=()):
+    """기본 data/ CSV에 올린 파일(CSV·엑셀)을 덮어써서 읽는다. (데이터, 오류, 바뀐 표)를 돌려준다."""
+    raw = m.read_tables()
+    errors, used = [], []
+    for filename, content in uploads:
+        try:
+            tables = m.read_upload(filename, content)
+        except Exception as e:  # 깨진 파일은 어떤 예외든 사용자 문구로 바꾼다
+            errors.append(f"{filename}: 파일을 읽을 수 없습니다 ({e})")
+            continue
+        if not tables:
+            names = ", ".join(m.TABLES)
+            errors.append(f"{filename}: 파일 이름(CSV·엑셀) 또는 시트 이름(엑셀)이 {names} 중 하나여야 합니다.")
+        raw.update(tables)
+        used += list(tables)
+    errors = errors or m.validate_tables(raw)
+    return (None, errors, []) if errors else (m.prepare_data(raw), [], sorted(set(used)))
+
+====================================================================================================
+### app.py → template_zip (126~134줄, 원본 그대로)
+====================================================================================================
+@st.cache_data
+def template_zip():
+    """현재 더미데이터 CSV 5개를 양식으로 묶는다."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in m.TABLES:
+            z.write(m.DATA_DIR / f"{name}.csv", f"{name}.csv")
+        z.write(m.DATA_DIR / "README_더미데이터.md", "README_더미데이터.md")
+    return buf.getvalue()
+
+====================================================================================================
+### app.py → template_xlsx (137~144줄, 원본 그대로)
+====================================================================================================
+@st.cache_data
+def template_xlsx():
+    """현재 더미데이터를 시트 5개짜리 엑셀 한 파일로."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for name, df in m.read_tables().items():
+            df.to_excel(w, sheet_name=name, index=False)
+    return buf.getvalue()
+
+====================================================================================================
+### app.py → report_files (147~149줄, 원본 그대로)
+====================================================================================================
+@st.cache_data
+def report_files(md):
+    return ex.report_pdf(md), ex.report_docx(md)
+
